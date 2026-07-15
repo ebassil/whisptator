@@ -50,6 +50,7 @@ public final class MicrophoneCapture: NSObject, @unchecked Sendable {
         }
 
         guard let device else {
+            AppLogger.shared.log(category: .audio, message: "Microphone error: device not found")
             delegate?.microphoneCapture(self, didFailWithError: MicrophoneError.deviceNotFound)
             return
         }
@@ -59,6 +60,7 @@ public final class MicrophoneCapture: NSObject, @unchecked Sendable {
             if session.canAddInput(input) {
                 session.addInput(input)
             } else {
+                AppLogger.shared.log(category: .audio, message: "Microphone error: cannot add input")
                 delegate?.microphoneCapture(self, didFailWithError: MicrophoneError.cannotAddInput)
                 return
             }
@@ -68,6 +70,7 @@ public final class MicrophoneCapture: NSObject, @unchecked Sendable {
             if session.canAddOutput(output) {
                 session.addOutput(output)
             } else {
+                AppLogger.shared.log(category: .audio, message: "Microphone error: cannot add output")
                 delegate?.microphoneCapture(self, didFailWithError: MicrophoneError.cannotAddOutput)
                 return
             }
@@ -76,6 +79,7 @@ public final class MicrophoneCapture: NSObject, @unchecked Sendable {
             captureSession = session
             session.startRunning()
             isCapturing = true
+            AppLogger.shared.log(category: .audio, message: "Microphone capture started (device: \(device.localizedName))")
             delegate?.microphoneCaptureDidStart(self)
         } catch {
             delegate?.microphoneCapture(self, didFailWithError: error)
@@ -88,6 +92,7 @@ public final class MicrophoneCapture: NSObject, @unchecked Sendable {
         captureSession = nil
         audioOutput = nil
         isCapturing = false
+        AppLogger.shared.log(category: .audio, message: "Microphone capture stopped")
         delegate?.microphoneCaptureDidStop(self)
     }
 

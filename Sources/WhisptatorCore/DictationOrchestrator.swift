@@ -76,13 +76,26 @@ public final class DictationOrchestrator: @unchecked Sendable {
         guard currentState == .idle else { return }
         recordedBuffers = []
         currentState = .recording
+        AppLogger.shared.log(category: .dictation, message: "Dictation recording started")
         microphoneCapture.startCapture(deviceID: settings.selectedAudioDeviceID.isEmpty ? nil : settings.selectedAudioDeviceID)
     }
 
     private func stopRecordingAndTranscribe() {
         guard currentState == .recording else { return }
         currentState = .transcribing
+        AppLogger.shared.log(category: .dictation, message: "Dictation recording stopped, starting transcription")
         microphoneCapture.stopCapture()
+
+        let audioSaver = AudioFileSaver()
+        if settings.saveAudioFiles {
+            let allSamples = mergeBuffers(recordedBuffers)
+            Task {
+                let path = audioSaver.saveAudioFile(samples: allSamples, sampleRate: 16000, to: settings.audioSaveLocation)
+                if let path {
+                    AppLogger.shared.log(category: .dictation, message: "Audio saved to: \(path)")
+                }
+            }
+        }
 
         Task {
             await performTranscription()
@@ -94,9 +107,12 @@ public final class DictationOrchestrator: @unchecked Sendable {
         recordedBuffers = []
 
         guard !allSamples.isEmpty else {
+            AppLogger.shared.log(category: .dictation, message: "Empty audio, skipping transcription")
             currentState = .idle
             return
         }
+
+        AppLogger.shared.log(category: .dictation, message: "Transcription started (samples: \(allSamples.count))")
 
         let convertedSamples: [Float]
         if let firstBuffer = AVAudioPCMBuffer(
@@ -133,10 +149,13 @@ public final class DictationOrchestrator: @unchecked Sendable {
                 snippets: settings.snippets
             )
 
+            AppLogger.shared.log(category: .dictation, message: "Transcription completed (chars: \(cleanedText.count))")
             currentState = .pasting
+            AppLogger.shared.log(category: .dictation, message: "Pasted text (mode: \(settings.pasteMode.rawValue), chars: \(cleanedText.count))")
             pasteEngine.paste(cleanedText, mode: settings.pasteMode)
             currentState = .idle
         } catch {
+            AppLogger.shared.log(category: .dictation, message: "Transcription failed: \(error.localizedDescription)")
             currentState = .error(error.localizedDescription)
             onError?(error)
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in

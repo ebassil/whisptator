@@ -25,16 +25,22 @@ public final class AppCoordinator: ObservableObject {
 
         dictationOrchestrator.meetingRecorder = meetingRecorder
 
+        settings.onSettingChange = { key in
+            AppLogger.shared.log(category: .settings, message: "Setting changed: \(key)")
+        }
+
         setupDictationCallbacks()
         setupMeetingCallbacks()
         setupNotifications()
     }
 
     public func start() throws {
+        AppLogger.shared.log(category: .system, message: "AppCoordinator started")
         try dictationOrchestrator.start()
     }
 
     public func stop() {
+        AppLogger.shared.log(category: .system, message: "AppCoordinator stopped")
         dictationOrchestrator.stop()
         overlayController.dismiss()
     }
@@ -84,6 +90,7 @@ public final class AppCoordinator: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }
+                AppLogger.shared.log(category: .system, message: "Notification: startDictation")
                 if self.dictationOrchestrator.state == .idle {
                     self.dictationOrchestrator.updateShortcuts()
                 }
@@ -94,6 +101,7 @@ public final class AppCoordinator: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }
+                AppLogger.shared.log(category: .system, message: "Notification: startMeeting")
                 Task {
                     if self.meetingRecorder.state == .idle {
                         await self.meetingRecorder.startRecording()
@@ -106,6 +114,7 @@ public final class AppCoordinator: ObservableObject {
     }
 
     private func handleDictationStateChange(_ state: DictationState) {
+        AppLogger.shared.log(category: .system, message: "Dictation state: \(state)")
         switch state {
         case .idle:
             overlayController.showCompletionThenDismiss()
@@ -121,6 +130,7 @@ public final class AppCoordinator: ObservableObject {
     }
 
     private func handleMeetingStateChange(_ state: MeetingState) {
+        AppLogger.shared.log(category: .system, message: "Meeting state: \(state)")
         switch state {
         case .idle:
             overlayController.showCompletionThenDismiss()

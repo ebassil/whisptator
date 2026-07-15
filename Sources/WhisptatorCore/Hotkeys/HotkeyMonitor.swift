@@ -51,8 +51,10 @@ public final class HotkeyMonitor: @unchecked Sendable {
     public func start() throws {
         guard !isRunning else { return }
         guard AXIsProcessTrusted() else {
+            AppLogger.shared.log(category: .shortcut, message: "Hotkey start failed: accessibility not granted")
             throw HotkeyError.accessibilityNotGranted
         }
+        AppLogger.shared.log(category: .shortcut, message: "Hotkey monitor started")
 
         tapThread = Thread { [weak self] in
             self?.runEventTap()
@@ -64,6 +66,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
 
     public func stop() {
         guard isRunning else { return }
+        AppLogger.shared.log(category: .shortcut, message: "Hotkey monitor stopped")
         isRunning = false
 
         if let source = runLoopSource, let rl = tapThreadRunLoop {
@@ -116,6 +119,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
         reEnableTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             guard let self, let tap = self.eventTap else { return }
             CGEvent.tapEnable(tap: tap, enable: true)
+            AppLogger.shared.log(category: .shortcut, message: "Event tap re-enabled (timeout recovery)")
         }
 
         CFRunLoopRunInMode(.defaultMode, .infinity, false)
@@ -195,6 +199,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
 
         if isHeld && !pushToTalkModifierHeld {
             pushToTalkModifierHeld = true
+            AppLogger.shared.log(category: .shortcut, message: "Modifier-only shortcut matched: push-to-talk")
             delegate?.hotkeyMonitor(self, didDetectPushToTalkDown: pushToTalkShortcut)
         } else if !isHeld && pushToTalkModifierHeld {
             pushToTalkModifierHeld = false
@@ -208,6 +213,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
         let wasHeld = !needed.isEmpty && previousModifierKeyCodes == needed
 
         if isHeld && !wasHeld {
+            AppLogger.shared.log(category: .shortcut, message: "Modifier-only shortcut matched: hands-free")
             delegate?.hotkeyMonitor(self, didDetectHandsFreeTap: handsFreeShortcut)
         }
     }
@@ -218,6 +224,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
         let wasHeld = !needed.isEmpty && previousModifierKeyCodes == needed
 
         if isHeld && !wasHeld {
+            AppLogger.shared.log(category: .shortcut, message: "Modifier-only shortcut matched: meeting")
             delegate?.hotkeyMonitor(self, didDetectMeetingToggle: meetingShortcut)
         }
     }
@@ -225,12 +232,15 @@ public final class HotkeyMonitor: @unchecked Sendable {
     private func handleKeyDown(shortcut: ShortcutKeyCode) {
         if shortcut == pushToTalkShortcut && !pushToTalkDown {
             pushToTalkDown = true
+            AppLogger.shared.log(category: .shortcut, message: "Push-to-talk down: keyCode=\(shortcut.keyCode)")
             delegate?.hotkeyMonitor(self, didDetectPushToTalkDown: shortcut)
         } else if shortcut == handsFreeShortcut {
             handsFreeRecording.toggle()
+            AppLogger.shared.log(category: .shortcut, message: "Hands-free tap detected")
             delegate?.hotkeyMonitor(self, didDetectHandsFreeTap: shortcut)
         } else if shortcut == meetingShortcut {
             meetingRecording.toggle()
+            AppLogger.shared.log(category: .shortcut, message: "Meeting toggle detected")
             delegate?.hotkeyMonitor(self, didDetectMeetingToggle: shortcut)
         }
     }
@@ -238,6 +248,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
     private func handleKeyUp(shortcut: ShortcutKeyCode) {
         if shortcut == pushToTalkShortcut && pushToTalkDown {
             pushToTalkDown = false
+            AppLogger.shared.log(category: .shortcut, message: "Push-to-talk up")
             delegate?.hotkeyMonitor(self, didDetectPushToTalkUp: shortcut)
         }
     }

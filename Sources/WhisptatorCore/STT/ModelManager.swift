@@ -26,6 +26,7 @@ public final class ModelManager: @unchecked Sendable {
     public func loadModel() async {
         downloadStatus = .downloading(progress: 0, message: "Starting...")
         onStatusChange?(downloadStatus)
+        AppLogger.shared.log(category: .model, message: "Model download started: \(modelId)")
 
         do {
             let loadedModel = try await WhisperASRModel.fromPretrained(
@@ -41,9 +42,11 @@ public final class ModelManager: @unchecked Sendable {
             model = loadedModel
             downloadStatus = .loaded
             onStatusChange?(downloadStatus)
+            AppLogger.shared.log(category: .model, message: "Model loaded successfully")
         } catch {
             downloadStatus = .failed(error)
             onStatusChange?(downloadStatus)
+            AppLogger.shared.log(category: .model, message: "Model load failed: \(error.localizedDescription)")
         }
     }
 
@@ -57,9 +60,11 @@ public final class ModelManager: @unchecked Sendable {
             model = loadedModel
             downloadStatus = .loaded
             onStatusChange?(downloadStatus)
+            AppLogger.shared.log(category: .model, message: "Model loaded from cache")
         } catch {
             downloadStatus = .failed(error)
             onStatusChange?(downloadStatus)
+            AppLogger.shared.log(category: .model, message: "Model load failed: \(error.localizedDescription)")
         }
     }
 

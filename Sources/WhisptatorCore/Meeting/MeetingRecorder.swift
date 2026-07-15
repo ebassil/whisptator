@@ -57,6 +57,7 @@ public final class MeetingRecorder: @unchecked Sendable {
         guard currentState == .idle else { return }
         currentState = .recording
         mixedBuffers = []
+        AppLogger.shared.log(category: .meeting, message: "Meeting recording started (source: \(settings.meetingAudioSource.rawValue))")
 
         do {
             try audioMixer.start()
@@ -71,6 +72,7 @@ public final class MeetingRecorder: @unchecked Sendable {
                 try await systemAudioCapture.startCapture()
             }
         } catch {
+            AppLogger.shared.log(category: .meeting, message: "Meeting error: \(error.localizedDescription)")
             currentState = .error(error.localizedDescription)
             onError?(error)
         }
@@ -79,6 +81,7 @@ public final class MeetingRecorder: @unchecked Sendable {
     public func stopRecording() async {
         guard currentState == .recording else { return }
         currentState = .transcribing
+        AppLogger.shared.log(category: .meeting, message: "Meeting recording stopped, starting transcription")
 
         microphoneCapture.stopCapture()
         await systemAudioCapture.stopCapture()
@@ -94,12 +97,15 @@ public final class MeetingRecorder: @unchecked Sendable {
             }
 
             let text = try await transcriptionEngine.transcribe(audio: allSamples, sampleRate: 48000)
+            AppLogger.shared.log(category: .meeting, message: "Meeting transcription completed (chars: \(text.count))")
 
             currentState = .saving
             transcriptSaver.saveTranscript(text, to: settings.meetingSaveLocation)
+            AppLogger.shared.log(category: .meeting, message: "Transcript saved to: \(settings.meetingSaveLocation)")
 
             currentState = .idle
         } catch {
+            AppLogger.shared.log(category: .meeting, message: "Meeting error: \(error.localizedDescription)")
             currentState = .error(error.localizedDescription)
             onError?(error)
         }

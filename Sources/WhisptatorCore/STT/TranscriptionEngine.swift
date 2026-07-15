@@ -12,7 +12,15 @@ public final class TranscriptionEngine: @unchecked Sendable {
         guard modelManager.isModelLoaded else {
             throw ModelError.modelNotLoaded
         }
-        return try await modelManager.transcribe(audio: audio, sampleRate: sampleRate, language: language)
+        AppLogger.shared.log(category: .transcription, message: "Transcription started (samples: \(audio.count), sampleRate: \(sampleRate))")
+        do {
+            let result = try await modelManager.transcribe(audio: audio, sampleRate: sampleRate, language: language)
+            AppLogger.shared.log(category: .transcription, message: "Transcription completed (text length: \(result.count))")
+            return result
+        } catch {
+            AppLogger.shared.log(category: .transcription, message: "Transcription error: \(error.localizedDescription)")
+            throw error
+        }
     }
 
     public func transcribeBuffer(_ buffer: AVAudioPCMBuffer, language: String? = nil) async throws -> String {

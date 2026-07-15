@@ -79,14 +79,3 @@ The system SHALL allow the user to select which microphone device to use for dic
 #### Scenario: Device selection persisted
 - **WHEN** the user selects a different audio input device
 - **THEN** the selection is saved and used for all subsequent dictation sessions
-
-### Requirement: Audio file saving
-The system SHALL optionally save recorded dictation audio to disk as WAV files.
-
-#### Scenario: Audio saved when enabled
-- **WHEN** dictation recording stops and "Save audio files" is enabled in settings
-- **THEN** the recorded audio is saved as a WAV file (16-bit PCM, 16kHz mono) to the configured save location
-
-#### Scenario: Audio not saved when disabled
-- **WHEN** dictation recording stops and "Save audio files" is disabled in settings
-- **THEN** the recorded audio is not saved to disk

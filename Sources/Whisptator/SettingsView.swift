@@ -24,6 +24,9 @@ struct SettingsView: View {
 
             OverlaySettingsTab(settings: coordinator.settings)
                 .tabItem { Label("Overlay", systemImage: "circle.hexagongrid") }
+
+            LogsSettingsTab()
+                .tabItem { Label("Logs", systemImage: "list.bullet.rectangle") }
         }
         .frame(width: 500, height: 400)
     }
@@ -167,12 +170,97 @@ struct DictationSettingsTab: View {
                     Text("Japanese").tag("ja")
                     Text("Chinese").tag("zh")
                 }
+
+                Toggle("Save audio files", isOn: $settings.saveAudioFiles)
+
+                if settings.saveAudioFiles {
+                    HStack {
+                        Text(settings.audioSaveLocation)
+                            .lineLimit(1)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Change") {
+                            let panel = NSOpenPanel()
+                            panel.canChooseDirectories = true
+                            panel.canChooseFiles = false
+                            panel.allowsMultipleSelection = false
+                            if panel.runModal() == .OK, let url = panel.url {
+                                settings.audioSaveLocation = url.path
+                            }
+                        }
+                    }
+                }
             }
         }
         .formStyle(.grouped)
         .padding()
         .onChange(of: settings.pushToTalkShortcut) { _, _ in onShortcutChange?() }
         .onChange(of: settings.handsFreeShortcut) { _, _ in onShortcutChange?() }
+    }
+}
+
+struct LogsSettingsTab: View {
+    @State private var logger = AppLogger.shared
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                List(logger.entries.reversed()) { entry in
+                    HStack(spacing: 8) {
+                        Text(entry.timestamp, style: .time)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        CategoryBadge(category: entry.category)
+                        Text(entry.message)
+                            .font(.caption)
+                    }
+                    .id(entry.id)
+                }
+                .onChange(of: logger.entries.count) { _, _ in
+                    if let last = logger.entries.last {
+                        proxy.scrollTo(last.id, anchor: .top)
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Clear") {
+                    logger.clear()
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+            }
+        }
+    }
+}
+
+struct CategoryBadge: View {
+    let category: LogCategory
+
+    var color: Color {
+        switch category {
+        case .shortcut: return .orange
+        case .dictation: return .blue
+        case .meeting: return .purple
+        case .model: return .green
+        case .transcription: return .teal
+        case .audio: return .pink
+        case .settings: return .gray
+        case .overlay: return .yellow
+        case .system: return .secondary
+        }
+    }
+
+    var body: some View {
+        Text(category.rawValue)
+            .font(.caption2)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color, in: Capsule())
     }
 }
 

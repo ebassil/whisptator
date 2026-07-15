@@ -19,6 +19,7 @@ public final class OverlayController {
         dismiss()
 
         let screens = screensForMode()
+        AppLogger.shared.log(category: .overlay, message: "Overlay shown (state: \(state), screens: \(screens.count))")
         for screen in screens {
             let window = createWindow(for: screen)
             let hostingView = NSHostingView(
@@ -46,6 +47,7 @@ public final class OverlayController {
         if windows.isEmpty {
             show(state: state)
         } else {
+            AppLogger.shared.log(category: .overlay, message: "Overlay state updated: \(state)")
             for window in windows {
                 guard let hostingView = window.contentView as? NSHostingView<OverlayContentView> else { continue }
                 hostingView.rootView = OverlayContentView(
@@ -70,6 +72,7 @@ public final class OverlayController {
     }
 
     public func dismiss() {
+        AppLogger.shared.log(category: .overlay, message: "Overlay dismissed")
         for window in windows {
             window.orderOut(nil)
         }
@@ -78,6 +81,7 @@ public final class OverlayController {
 
     public func showCompletionThenDismiss() {
         updateState(.completion)
+        AppLogger.shared.log(category: .overlay, message: "Overlay showing completion, will dismiss in 1.5s")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.dismiss()
         }

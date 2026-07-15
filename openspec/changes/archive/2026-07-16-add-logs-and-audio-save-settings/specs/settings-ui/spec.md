@@ -48,29 +48,6 @@ The system SHALL provide a Dictation settings tab with shortcut configuration, p
 - **WHEN** the user opens Dictation settings
 - **THEN** a dropdown shows "Auto-detect" and common language options
 
-#### Scenario: Save audio files toggle
-- **WHEN** the user opens Dictation settings
-- **THEN** a "Save audio files" toggle is displayed (default: off)
-
-#### Scenario: Audio save location picker
-- **WHEN** the user opens Dictation settings and "Save audio files" is enabled
-- **THEN** the save location path is displayed with a "Change" button to select a directory
-
-### Requirement: Logs settings tab
-The system SHALL provide a Logs settings tab that displays real-time log entries from all subsystems.
-
-#### Scenario: Log entries displayed
-- **WHEN** the user opens Logs settings
-- **THEN** a scrollable list of log entries is displayed, newest first, with timestamp, category badge, and message
-
-#### Scenario: Log entries auto-update
-- **WHEN** a new log entry is emitted from any subsystem
-- **THEN** the log list automatically updates and scrolls to show the newest entry
-
-#### Scenario: Clear logs
-- **WHEN** the user clicks "Clear"
-- **THEN** all log entries are removed
-
 ### Requirement: Model settings tab
 The system SHALL provide a Model settings tab showing the available Whisper models with download status and selection.
 
