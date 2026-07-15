@@ -1,6 +1,6 @@
 APP_NAME := Whisptator
 BUNDLE_ID := com.whisptator.Whisptator
-CODESIGN_IDENTITY ?= -
+CODESIGN_IDENTITY := "206D3167587E5F7183B62DE441069F83AB48E776"
 
 DEBUG_DIR := .build/debug
 RELEASE_DIR := .build/release

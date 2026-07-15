@@ -24,6 +24,6 @@
 ## 5. Test & Verify
 
 - [x] 5.1 Build the app with `make build-debug` and verify no compilation errors
-- [ ] 5.2 Run the app and verify all three permission rows display correctly in General Settings
-- [ ] 5.3 Verify the Accessibility deep-link opens the correct System Settings pane
-- [ ] 5.4 Verify permission status updates reactively when granted while settings are open
+- [x] 5.2 Run the app and verify all three permission rows display correctly in General Settings
+- [x] 5.3 Verify the Accessibility deep-link opens the correct System Settings pane
+- [x] 5.4 Verify permission status updates reactively when granted while settings are open

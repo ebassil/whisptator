@@ -271,6 +271,7 @@ log stream --predicate 'process == "Whisptator"'
 - Remove a stale TCC entry (reset permission):  
   - `tccutil reset Accessibility com.whisptator.Whisptator` 
   - `tccutil reset Microphone com.whisptator.Whisptator`  
+  - `tccutil reset ScreenCapture com.whisptator.Whisptator`
 
 **"Accessibility permission is required"**
 - Go to System Settings → Privacy & Security → Accessibility

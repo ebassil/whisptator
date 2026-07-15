@@ -52,9 +52,7 @@ struct OnboardingView: View {
                     description: "Required for system audio capture during meetings",
                     granted: screenRecordingGranted,
                     onGrant: {
-                        Task {
-                            screenRecordingGranted = await permissionGate.requestScreenRecordingPermission()
-                        }
+                        screenRecordingGranted = permissionGate.requestScreenRecordingPermission()
                     }
                 )
             }

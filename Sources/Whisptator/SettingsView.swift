@@ -58,14 +58,12 @@ struct GeneralSettingsTab: View {
                 PermissionRow(
                     name: "Microphone",
                     granted: permissions.microphone,
-                    settingsPane: "Privacy_Microphone",
-                    onRequest: permissionGate.requestMicrophonePermission
+                    onGrant: { Task { await permissionGate.requestMicrophonePermission() } }
                 )
                 PermissionRow(
                     name: "Screen Recording",
                     granted: permissions.screenRecording,
-                    settingsPane: "Privacy_ScreenCapture",
-                    onRequest: permissionGate.requestScreenRecordingPermission
+                    onGrant: { _ = permissionGate.requestScreenRecordingPermission() }
                 )
             }
         }
@@ -94,8 +92,15 @@ struct GeneralSettingsTab: View {
 struct PermissionRow: View {
     let name: String
     let granted: Bool
-    let settingsPane: String
-    var onRequest: (() async -> Bool)?
+    let onGrant: (() -> Void)?
+    let settingsPane: String?
+
+    init(name: String, granted: Bool, onGrant: (() -> Void)? = nil, settingsPane: String? = nil) {
+        self.name = name
+        self.granted = granted
+        self.onGrant = onGrant
+        self.settingsPane = settingsPane
+    }
 
     var body: some View {
         HStack {
@@ -104,13 +109,11 @@ struct PermissionRow: View {
             if granted {
                 Label("Granted", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
-            } else if let onRequest {
+            } else if let onGrant {
                 Button("Grant") {
-                    Task {
-                        _ = await onRequest()
-                    }
+                    onGrant()
                 }
-            } else {
+            } else if let settingsPane {
                 Button("Grant in Settings") {
                     let url = URL(
                         string: "x-apple.systempreferences:com.apple.preference.security?\(settingsPane)"

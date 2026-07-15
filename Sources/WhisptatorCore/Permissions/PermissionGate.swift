@@ -45,12 +45,9 @@ public final class PermissionGate: @unchecked Sendable {
         await AVCaptureDevice.requestAccess(for: .audio)
     }
 
-    public func requestScreenRecordingPermission() async -> Bool {
-        await withCheckedContinuation { continuation in
-            CGPreflightScreenCaptureAccess()
-            let granted = CGRequestScreenCaptureAccess()
-            continuation.resume(returning: granted)
-        }
+    public func requestScreenRecordingPermission() -> Bool {
+        CGPreflightScreenCaptureAccess()
+        return CGRequestScreenCaptureAccess()
     }
 
     public func openAccessibilitySettings() {
