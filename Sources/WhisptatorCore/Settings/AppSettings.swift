@@ -151,6 +151,8 @@ public final class AppSettings: @unchecked Sendable {
         static let dualScreenMode = "dualScreenMode"
         static let saveAudioFiles = "saveAudioFiles"
         static let audioSaveLocation = "audioSaveLocation"
+        static let isLoggingPaused = "logPaused"
+        static let logEnabledCategories = "logEnabledCategories"
     }
 
     // MARK: - Shortcuts
@@ -298,6 +300,18 @@ public final class AppSettings: @unchecked Sendable {
     public var audioSaveLocation: String {
         get { UserDefaults.standard.string(forKey: Key.audioSaveLocation) ?? "\(NSHomeDirectory())/Documents/Whisptator/Audio" }
         set { UserDefaults.standard.set(newValue, forKey: Key.audioSaveLocation); onSettingChange?("audioSaveLocation") }
+    }
+
+    // MARK: - Logging
+
+    public var isLoggingPaused: Bool {
+        get { UserDefaults.standard.bool(forKey: Key.isLoggingPaused) }
+        set { UserDefaults.standard.set(newValue, forKey: Key.isLoggingPaused); onSettingChange?("isLoggingPaused") }
+    }
+
+    public var logEnabledCategories: [String] {
+        get { Self.decode([String].self, forKey: Key.logEnabledCategories) ?? LogCategory.allCases.map(\.rawValue) }
+        set { Self.encode(newValue, forKey: Key.logEnabledCategories); onSettingChange?("logEnabledCategories") }
     }
 
     // MARK: - Defaults

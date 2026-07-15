@@ -31,6 +31,8 @@ public final class AppLogger: @unchecked Sendable {
     public static let shared = AppLogger()
 
     public private(set) var entries: [LogEntry] = []
+    public private(set) var isPaused: Bool = false
+    public private(set) var enabledCategories: Set<LogCategory> = Set(LogCategory.allCases)
 
     private let maxEntries = 1000
     private let lock = NSLock()
@@ -38,6 +40,13 @@ public final class AppLogger: @unchecked Sendable {
     private init() {}
 
     public func log(category: LogCategory, message: String) {
+        lock.lock()
+        let paused = isPaused
+        let enabled = enabledCategories.contains(category)
+        lock.unlock()
+
+        guard !paused, enabled else { return }
+
         let entry = LogEntry(category: category, message: message)
         lock.lock()
         entries.append(entry)
@@ -50,6 +59,41 @@ public final class AppLogger: @unchecked Sendable {
     public func clear() {
         lock.lock()
         entries.removeAll()
+        lock.unlock()
+    }
+
+    public func setPaused(_ paused: Bool) {
+        lock.lock()
+        isPaused = paused
+        lock.unlock()
+    }
+
+    public func setCategoryEnabled(_ category: LogCategory, enabled: Bool) {
+        lock.lock()
+        if enabled {
+            enabledCategories.insert(category)
+        } else {
+            enabledCategories.remove(category)
+        }
+        lock.unlock()
+    }
+
+    public func enableAllCategories() {
+        lock.lock()
+        enabledCategories = Set(LogCategory.allCases)
+        lock.unlock()
+    }
+
+    public func disableAllCategories() {
+        lock.lock()
+        enabledCategories = []
+        lock.unlock()
+    }
+
+    public func loadFrom(settings: AppSettings) {
+        lock.lock()
+        isPaused = settings.isLoggingPaused
+        enabledCategories = Set(settings.logEnabledCategories.compactMap(LogCategory.init(rawValue:)))
         lock.unlock()
     }
 }

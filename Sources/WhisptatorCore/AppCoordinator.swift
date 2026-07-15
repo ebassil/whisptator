@@ -29,6 +29,8 @@ public final class AppCoordinator: ObservableObject {
             AppLogger.shared.log(category: .settings, message: "Setting changed: \(key)")
         }
 
+        AppLogger.shared.loadFrom(settings: settings)
+
         setupDictationCallbacks()
         setupMeetingCallbacks()
         setupNotifications()

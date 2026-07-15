@@ -32,6 +32,7 @@ struct WhisptatorApp: App {
         Settings {
             SettingsView(coordinator: coordinator)
         }
+        .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .newItem) {}
         }

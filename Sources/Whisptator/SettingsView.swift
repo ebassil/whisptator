@@ -25,10 +25,10 @@ struct SettingsView: View {
             OverlaySettingsTab(settings: coordinator.settings)
                 .tabItem { Label("Overlay", systemImage: "circle.hexagongrid") }
 
-            LogsSettingsTab()
+            LogsSettingsTab(settings: coordinator.settings)
                 .tabItem { Label("Logs", systemImage: "list.bullet.rectangle") }
         }
-        .frame(width: 500, height: 400)
+        .frame(minWidth: 480, minHeight: 380)
     }
 }
 
@@ -201,6 +201,8 @@ struct DictationSettingsTab: View {
 
 struct LogsSettingsTab: View {
     @State private var logger = AppLogger.shared
+    @State private var showConfigSheet = false
+    @Bindable var settings: AppSettings
 
     var body: some View {
         VStack(spacing: 0) {
@@ -225,15 +227,113 @@ struct LogsSettingsTab: View {
 
             Divider()
 
-            HStack {
+            HStack(spacing: 4) {
+                Button {
+                    let paused = !logger.isPaused
+                    logger.setPaused(paused)
+                    settings.isLoggingPaused = paused
+                } label: {
+                    Label(
+                        logger.isPaused ? "Start" : "Stop",
+                        systemImage: logger.isPaused ? "play.fill" : "pause.fill"
+                    )
+                }
+                .help(logger.isPaused ? "Resume logging" : "Pause logging")
+
+                Button {
+                    showConfigSheet = true
+                } label: {
+                    Label("Config Logs", systemImage: "gearshape")
+                }
+                .help("Configure log categories")
+
+                Button {
+                    saveLogsToCSV()
+                } label: {
+                    Label("Save", systemImage: "square.and.arrow.down")
+                }
+                .help("Save logs to CSV")
+
                 Spacer()
+
                 Button("Clear") {
                     logger.clear()
                 }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .labelStyle(.iconOnly)
+        }
+        .sheet(isPresented: $showConfigSheet) {
+            LogConfigSheet(logger: logger, settings: settings)
+        }
+    }
+
+    private func saveLogsToCSV() {
+        let panel = NSSavePanel()
+        panel.title = "Save Logs"
+        panel.nameFieldStringValue = "whisptator-logs-\(ISO8601DateFormatter().string(from: Date())).csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        var csv = "Timestamp,Category,Message\n"
+        let dateFormatter = ISO8601DateFormatter()
+        for entry in logger.entries {
+            let ts = dateFormatter.string(from: entry.timestamp)
+            let msg = entry.message.contains(",") || entry.message.contains("\n") || entry.message.contains("\"")
+                ? "\"\(entry.message.replacingOccurrences(of: "\"", with: "\"\""))\""
+                : entry.message
+            csv += "\(ts),\(entry.category.rawValue),\(msg)\n"
+        }
+
+        try? csv.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
+struct LogConfigSheet: View {
+    @State var logger: AppLogger
+    @Bindable var settings: AppSettings
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("Enable All") {
+                    logger.enableAllCategories()
+                    settings.logEnabledCategories = LogCategory.allCases.map(\.rawValue)
+                }
+                Button("Disable All") {
+                    logger.disableAllCategories()
+                    settings.logEnabledCategories = []
+                }
+            }
+            .padding()
+
+            Divider()
+
+            List(LogCategory.allCases, id: \.self) { category in
+                Toggle(isOn: Binding(
+                    get: { logger.enabledCategories.contains(category) },
+                    set: { enabled in
+                        logger.setCategoryEnabled(category, enabled: enabled)
+                        var cats = Set(settings.logEnabledCategories.compactMap(LogCategory.init(rawValue:)))
+                        if enabled {
+                            cats.insert(category)
+                        } else {
+                            cats.remove(category)
+                        }
+                        settings.logEnabledCategories = cats.map(\.rawValue)
+                    }
+                )) {
+                    HStack {
+                        CategoryBadge(category: category)
+                        Text(category.rawValue.capitalized)
+                    }
+                }
             }
         }
+        .frame(width: 300, height: 350)
+        .padding()
     }
 }
 
