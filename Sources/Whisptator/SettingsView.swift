@@ -1,6 +1,5 @@
 import SwiftUI
 import ServiceManagement
-import AVFoundation
 import WhisptatorCore
 
 struct SettingsView: View {
@@ -29,6 +28,13 @@ struct SettingsView: View {
 
 struct GeneralSettingsTab: View {
     @Bindable var settings: AppSettings
+    @State private var permissionGate = PermissionGate()
+    @State private var permissions = PermissionStatus(
+        accessibility: false,
+        microphone: false,
+        screenRecording: false
+    )
+    @State private var pollingTimer: Timer?
 
     var body: some View {
         Form {
@@ -44,18 +50,43 @@ struct GeneralSettingsTab: View {
             Toggle("Show in Dock", isOn: $settings.showInDock)
 
             Section("Permissions") {
-                PermissionRow(name: "Accessibility", granted: AXIsProcessTrusted())
-                PermissionRow(name: "Microphone", granted: checkMicrophonePermission())
+                PermissionRow(
+                    name: "Accessibility",
+                    granted: permissions.accessibility,
+                    settingsPane: "Privacy_Accessibility"
+                )
+                PermissionRow(
+                    name: "Microphone",
+                    granted: permissions.microphone,
+                    settingsPane: "Privacy_Microphone",
+                    onRequest: permissionGate.requestMicrophonePermission
+                )
+                PermissionRow(
+                    name: "Screen Recording",
+                    granted: permissions.screenRecording,
+                    settingsPane: "Privacy_ScreenCapture",
+                    onRequest: permissionGate.requestScreenRecordingPermission
+                )
             }
         }
         .formStyle(.grouped)
         .padding()
-    }
-
-    private func checkMicrophonePermission() -> Bool {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized: return true
-        default: return false
+        .onAppear {
+            permissions = permissionGate.checkPermissions()
+            pollingTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+                Task { @MainActor in
+                    permissions = permissionGate.checkPermissions()
+                }
+            }
+        }
+        .onDisappear {
+            pollingTimer?.invalidate()
+            pollingTimer = nil
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+        ) { _ in
+            permissions = permissionGate.checkPermissions()
         }
     }
 }
@@ -63,6 +94,8 @@ struct GeneralSettingsTab: View {
 struct PermissionRow: View {
     let name: String
     let granted: Bool
+    let settingsPane: String
+    var onRequest: (() async -> Bool)?
 
     var body: some View {
         HStack {
@@ -71,9 +104,18 @@ struct PermissionRow: View {
             if granted {
                 Label("Granted", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
+            } else if let onRequest {
+                Button("Grant") {
+                    Task {
+                        _ = await onRequest()
+                    }
+                }
             } else {
                 Button("Grant in Settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy") {
+                    let url = URL(
+                        string: "x-apple.systempreferences:com.apple.preference.security?\(settingsPane)"
+                    )
+                    if let url {
                         NSWorkspace.shared.open(url)
                     }
                 }

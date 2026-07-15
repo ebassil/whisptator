@@ -268,6 +268,9 @@ log stream --predicate 'process == "Whisptator"'
 - SwiftPM signs binaries with an auto-generated identifier that doesn't match the Info.plist `CFBundleIdentifier`, so macOS TCC can't associate the permissions
 - The Makefile re-signs the `.app` bundle with the correct identifier — always use `make run-debug` or `make run-release` instead of `swift run`
 - Verify signing with `codesign -dv .build/debug/Whisptator.app` — you should see `Info.plist=bound`
+- Remove a stale TCC entry (reset permission):  
+  - `tccutil reset Accessibility com.whisptator.Whisptator` 
+  - `tccutil reset Microphone com.whisptator.Whisptator`  
 
 **"Accessibility permission is required"**
 - Go to System Settings → Privacy & Security → Accessibility

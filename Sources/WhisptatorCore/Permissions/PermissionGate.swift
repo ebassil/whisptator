@@ -23,10 +23,22 @@ public final class PermissionGate: @unchecked Sendable {
 
     public func checkPermissions() -> PermissionStatus {
         PermissionStatus(
-            accessibility: AXIsProcessTrusted(),
+            accessibility: checkAccessibilityPermission(),
             microphone: checkMicrophonePermission(),
             screenRecording: checkScreenRecordingPermission()
         )
+    }
+
+    public func checkAccessibilityPermission() -> Bool {
+        AXIsProcessTrusted()
+    }
+
+    public func checkMicrophonePermission() -> Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
+
+    public func checkScreenRecordingPermission() -> Bool {
+        CGPreflightScreenCaptureAccess()
     }
 
     public func requestMicrophonePermission() async -> Bool {
@@ -59,11 +71,4 @@ public final class PermissionGate: @unchecked Sendable {
         }
     }
 
-    private func checkMicrophonePermission() -> Bool {
-        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-    }
-
-    private func checkScreenRecordingPermission() -> Bool {
-        CGPreflightScreenCaptureAccess()
-    }
 }
