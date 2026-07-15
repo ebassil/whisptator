@@ -30,6 +30,8 @@ public final class DictationOrchestrator: @unchecked Sendable {
 
     public var onStateChange: ((DictationState) -> Void)?
     public var onError: ((Error) -> Void)?
+    public var meetingRecorder: MeetingRecorder?
+    public var onAudioLevel: ((Float) -> Void)?
 
     private var currentState: DictationState = .idle {
         didSet { onStateChange?(currentState) }
@@ -173,7 +175,12 @@ extension DictationOrchestrator: HotkeyMonitorDelegate {
     }
 
     public func hotkeyMonitor(_ monitor: HotkeyMonitor, didDetectMeetingToggle shortcut: ShortcutKeyCode) {
-        // Handled by MeetingRecorder
+        guard let meetingRecorder else { return }
+        if meetingRecorder.state == .idle {
+            Task { await meetingRecorder.startRecording() }
+        } else if meetingRecorder.state == .recording {
+            Task { await meetingRecorder.stopRecording() }
+        }
     }
 }
 
@@ -181,6 +188,18 @@ extension DictationOrchestrator: MicrophoneCaptureDelegate {
     public func microphoneCapture(_ capture: MicrophoneCapture, didCaptureAudio buffer: AVAudioPCMBuffer) {
         guard currentState == .recording else { return }
         recordedBuffers.append(buffer)
+
+        if let channelData = buffer.floatChannelData?[0] {
+            let frameLength = Int(buffer.frameLength)
+            var sumOfSquares: Float = 0
+            for i in 0..<frameLength {
+                let sample = channelData[i]
+                sumOfSquares += sample * sample
+            }
+            let rms = sqrt(sumOfSquares / max(1, Float(frameLength)))
+            let normalizedLevel = min(rms * 5, 1.0)
+            onAudioLevel?(normalizedLevel)
+        }
     }
 
     public func microphoneCaptureDidStart(_ capture: MicrophoneCapture) {}

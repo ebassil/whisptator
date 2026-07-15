@@ -30,6 +30,7 @@ public final class MeetingRecorder: @unchecked Sendable {
 
     public var onStateChange: ((MeetingState) -> Void)?
     public var onError: ((Error) -> Void)?
+    public var onAudioLevel: ((Float) -> Void)?
 
     private var currentState: MeetingState = .idle {
         didSet { onStateChange?(currentState) }
@@ -119,6 +120,18 @@ public final class MeetingRecorder: @unchecked Sendable {
         lock.lock()
         mixedBuffers.append(buffer)
         lock.unlock()
+
+        if let channelData = buffer.floatChannelData?[0] {
+            let frameLength = Int(buffer.frameLength)
+            var sumOfSquares: Float = 0
+            for i in 0..<frameLength {
+                let sample = channelData[i]
+                sumOfSquares += sample * sample
+            }
+            let rms = sqrt(sumOfSquares / max(1, Float(frameLength)))
+            let normalizedLevel = min(rms * 5, 1.0)
+            onAudioLevel?(normalizedLevel)
+        }
     }
 }
 

@@ -8,6 +8,7 @@ public enum ModelDownloadStatus: Sendable {
     case failed(Error)
 }
 
+@Observable
 public final class ModelManager: @unchecked Sendable {
     private var model: WhisperASRModel?
     private let modelCacheDir: URL

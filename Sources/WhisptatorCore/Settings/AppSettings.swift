@@ -19,6 +19,19 @@ public enum AudioSourceMode: String, CaseIterable, Sendable {
     case systemOnly = "system_only"
 }
 
+public enum OverlayPosition: String, CaseIterable, Sendable {
+    case center
+    case topRight = "top_right"
+    case bottomCenter = "bottom_center"
+    case followCursor = "follow_cursor"
+}
+
+public enum DualScreenMode: String, CaseIterable, Sendable {
+    case primaryOnly = "primary_only"
+    case bothDisplays = "both_displays"
+    case activeAppDisplay = "active_app_display"
+}
+
 public enum AudioRetentionMode: String, CaseIterable, Sendable {
     case keep
     case deleteAfterTranscription = "delete_after_transcription"
@@ -129,6 +142,11 @@ public final class AppSettings: @unchecked Sendable {
         static let launchAtLogin = "launchAtLogin"
         static let showInDock = "showInDock"
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
+        static let overlayEnabled = "overlayEnabled"
+        static let overlayPosition = "overlayPosition"
+        static let overlayOpacity = "overlayOpacity"
+        static let overlaySize = "overlaySize"
+        static let dualScreenMode = "dualScreenMode"
     }
 
     // MARK: - Shortcuts
@@ -144,7 +162,7 @@ public final class AppSettings: @unchecked Sendable {
     }
 
     public var meetingShortcut: ShortcutKeyCode {
-        get { Self.decode(ShortcutKeyCode.self, forKey: Key.meetingShortcut) ?? ShortcutKeyCode(keyCode: 0, modifierFlags: 0) }
+        get { Self.decode(ShortcutKeyCode.self, forKey: Key.meetingShortcut) ?? ShortcutKeyCode(keyCode: 46, modifierFlags: UInt32(NSEvent.ModifierFlags.command.rawValue | NSEvent.ModifierFlags.option.rawValue)) }
         set { Self.encode(newValue, forKey: Key.meetingShortcut) }
     }
 
@@ -230,6 +248,39 @@ public final class AppSettings: @unchecked Sendable {
     public var hasCompletedOnboarding: Bool {
         get { UserDefaults.standard.bool(forKey: Key.hasCompletedOnboarding) }
         set { UserDefaults.standard.set(newValue, forKey: Key.hasCompletedOnboarding) }
+    }
+
+    // MARK: - Overlay
+
+    public var overlayEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: Key.overlayEnabled) == nil ? true : UserDefaults.standard.bool(forKey: Key.overlayEnabled) }
+        set { UserDefaults.standard.set(newValue, forKey: Key.overlayEnabled) }
+    }
+
+    public var overlayPosition: OverlayPosition {
+        get { OverlayPosition(rawValue: UserDefaults.standard.string(forKey: Key.overlayPosition) ?? OverlayPosition.center.rawValue) ?? .center }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.overlayPosition) }
+    }
+
+    public var overlayOpacity: Double {
+        get {
+            let val = UserDefaults.standard.double(forKey: Key.overlayOpacity)
+            return val == 0 ? 0.85 : val
+        }
+        set { UserDefaults.standard.set(newValue, forKey: Key.overlayOpacity) }
+    }
+
+    public var overlaySize: Double {
+        get {
+            let val = UserDefaults.standard.double(forKey: Key.overlaySize)
+            return val == 0 ? 1.0 : val
+        }
+        set { UserDefaults.standard.set(newValue, forKey: Key.overlaySize) }
+    }
+
+    public var dualScreenMode: DualScreenMode {
+        get { DualScreenMode(rawValue: UserDefaults.standard.string(forKey: Key.dualScreenMode) ?? DualScreenMode.primaryOnly.rawValue) ?? .primaryOnly }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.dualScreenMode) }
     }
 
     // MARK: - Defaults

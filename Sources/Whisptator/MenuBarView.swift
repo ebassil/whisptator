@@ -3,7 +3,7 @@ import WhisptatorCore
 import ServiceManagement
 
 struct MenuBarView: View {
-    @State private var settings = AppSettings()
+    @ObservedObject var coordinator: AppCoordinator
 
     var body: some View {
         Menu {
@@ -17,15 +17,11 @@ struct MenuBarView: View {
             SettingsLink()
             Divider()
             Button("Quit") {
+                coordinator.stop()
                 NSApplication.shared.terminate(nil)
             }
         } label: {
             Image(systemName: "mic.circle")
         }
     }
-}
-
-extension Notification.Name {
-    static let startDictation = Notification.Name("startDictation")
-    static let startMeeting = Notification.Name("startMeeting")
 }

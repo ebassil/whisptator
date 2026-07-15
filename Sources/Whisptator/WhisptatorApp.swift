@@ -5,39 +5,35 @@ import WhisptatorCore
 
 @main
 struct WhisptatorApp: App {
-    @State private var settings = AppSettings()
+    @State private var coordinator = AppCoordinator()
     @State private var showOnboarding = false
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarView()
+            MenuBarView(coordinator: coordinator)
                 .onAppear {
-                    if settings.showInDock {
+                    if coordinator.settings.showInDock {
                         NSApp.setActivationPolicy(.regular)
                     } else {
                         NSApp.setActivationPolicy(.accessory)
                     }
                 }
                 .task {
-                    guard !settings.hasCompletedOnboarding else { return }
-                    await AVCaptureDevice.requestAccess(for: .audio)
-                    settings.hasCompletedOnboarding = true
+                    if !coordinator.settings.hasCompletedOnboarding {
+                        await AVCaptureDevice.requestAccess(for: .audio)
+                        coordinator.settings.hasCompletedOnboarding = true
+                    }
+                    try? coordinator.start()
                 }
         } label: {
             Image(systemName: "mic.circle")
         }
 
         Settings {
-            SettingsView()
+            SettingsView(coordinator: coordinator)
         }
         .commands {
             CommandGroup(replacing: .newItem) {}
-        }
-    }
-
-    func checkOnboarding() {
-        if !settings.hasCompletedOnboarding {
-            showOnboarding = true
         }
     }
 }
