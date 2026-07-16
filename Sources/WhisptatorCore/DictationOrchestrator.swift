@@ -1,5 +1,4 @@
-import Foundation
-import AVFoundation
+@preconcurrency import AVFoundation
 
 public enum DictationState: Sendable, Equatable {
     case idle
@@ -40,7 +39,7 @@ public final class DictationOrchestrator: @unchecked Sendable {
     public var state: DictationState { currentState }
 
     private var recordedBuffers: [AVAudioPCMBuffer] = []
-    private let bufferLock = NSLock()
+    private let bufferQueue = DispatchQueue(label: "com.whisptator.buffer")
 
     public init(
         settings: AppSettings,
@@ -75,9 +74,7 @@ public final class DictationOrchestrator: @unchecked Sendable {
 
     private func startRecording() {
         guard currentState == .idle else { return }
-        bufferLock.lock()
-        recordedBuffers = []
-        bufferLock.unlock()
+        bufferQueue.sync { recordedBuffers.removeAll() }
         currentState = .recording
         AppLogger.shared.log(category: .dictation, message: "Dictation recording started")
         microphoneCapture.startCapture(deviceID: settings.selectedAudioDeviceID.isEmpty ? nil : settings.selectedAudioDeviceID)
@@ -93,25 +90,25 @@ public final class DictationOrchestrator: @unchecked Sendable {
             AppLogger.shared.log(category: .dictation, message: "Dictation recording stopped, starting transcription")
 
             let audioSaver = AudioFileSaver()
-            if self.settings.saveAudioFiles {
-                let allSamples = self.mergeBuffers(self.recordedBuffers)
-                Task {
-                    let path = audioSaver.saveAudioFile(samples: allSamples, sampleRate: 16000, to: self.settings.audioSaveLocation)
-                    if let path {
+            let saveAudio = self.settings.saveAudioFiles
+            let audioDir = self.settings.audioSaveLocation
+            let audioSettings = self.settings.audioSaveSettings
+
+            Task {
+                if saveAudio {
+                    let allSamples = self.snapshotRecordedBuffers()
+                    if let path = audioSaver.saveAudioFile(samples: allSamples, sampleRate: 48000, to: audioDir, settings: audioSettings) {
                         AppLogger.shared.log(category: .dictation, message: "Audio saved to: \(path)")
                     }
                 }
-            }
-
-            Task {
                 await self.performTranscription()
             }
         }
     }
 
     private func performTranscription() async {
-        let allSamples = mergeBuffers(recordedBuffers)
-        recordedBuffers = []
+        let allSamples = snapshotRecordedBuffers()
+        bufferQueue.sync { recordedBuffers.removeAll() }
 
         guard !allSamples.isEmpty else {
             AppLogger.shared.log(category: .dictation, message: "Empty audio, skipping transcription")
@@ -171,7 +168,8 @@ public final class DictationOrchestrator: @unchecked Sendable {
         }
     }
 
-    private func mergeBuffers(_ buffers: [AVAudioPCMBuffer]) -> [Float] {
+    private func snapshotRecordedBuffers() -> [Float] {
+        let buffers = bufferQueue.sync { recordedBuffers }
         var allSamples: [Float] = []
         for buffer in buffers {
             if let channelData = buffer.floatChannelData?[0] {
@@ -212,9 +210,7 @@ extension DictationOrchestrator: HotkeyMonitorDelegate {
 
 extension DictationOrchestrator: MicrophoneCaptureDelegate {
     public func microphoneCapture(_ capture: MicrophoneCapture, didCaptureAudio buffer: AVAudioPCMBuffer) {
-        bufferLock.lock()
-        recordedBuffers.append(buffer)
-        bufferLock.unlock()
+        bufferQueue.sync { recordedBuffers.append(buffer) }
 
         if let channelData = buffer.floatChannelData?[0] {
             let frameLength = Int(buffer.frameLength)

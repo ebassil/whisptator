@@ -1,68 +1,98 @@
-import Foundation
-import AVFoundation
+@preconcurrency import AVFoundation
+
+public enum AudioSaveFormat: String, CaseIterable, Sendable {
+    case wav
+    case mp3
+
+    public var label: String {
+        switch self {
+        case .wav: return "WAV"
+        case .mp3: return "MP3"
+        }
+    }
+
+    public var fileExtension: String { rawValue }
+}
+
+public struct AudioSaveSettings: Sendable {
+    public var format: AudioSaveFormat = .wav
+    public var mp3Bitrate: Int = 256
+
+    public init(format: AudioSaveFormat = .wav, mp3Bitrate: Int = 256) {
+        self.format = format
+        self.mp3Bitrate = mp3Bitrate
+    }
+}
 
 public final class AudioFileSaver: @unchecked Sendable {
     public init() {}
 
     @discardableResult
-    public func saveAudioFile(samples: [Float], sampleRate: Int, to directory: String) -> String? {
-        let fileManager = FileManager.default
+    public func saveAudioFile(samples: [Float], sampleRate: Int, to directory: String, settings: AudioSaveSettings = .init()) -> String? {
+        let fm = FileManager.default
         let dirURL = URL(fileURLWithPath: directory)
-
-        if !fileManager.fileExists(atPath: directory) {
-            try? fileManager.createDirectory(at: dirURL, withIntermediateDirectories: true)
+        if !fm.fileExists(atPath: directory) {
+            try? fm.createDirectory(at: dirURL, withIntermediateDirectories: true)
         }
 
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        let timestamp = dateFormatter.string(from: Date())
-        let filename = "dictation_\(timestamp).wav"
+        let filename = filename(for: settings.format)
         let fileURL = dirURL.appendingPathComponent(filename)
 
-        guard writeWAV(samples: samples, sampleRate: sampleRate, to: fileURL) else { return nil }
-        return fileURL.path
+        switch settings.format {
+        case .wav:
+            return saveWAV(samples: samples, sampleRate: sampleRate, to: fileURL) ? fileURL.path : nil
+        case .mp3:
+            return saveMP3(samples: samples, sampleRate: sampleRate, bitrate: settings.mp3Bitrate, to: fileURL) ? fileURL.path : nil
+        }
     }
 
-    private func writeWAV(samples: [Float], sampleRate: Int, to url: URL) -> Bool {
-        let sampleRateInt32 = Int32(sampleRate)
-        let numChannels: Int16 = 1
-        let bitsPerSample: Int16 = 16
-        let bytesPerSample = bitsPerSample / 8
-        let numSamples = samples.count
-        let dataSize = numSamples * Int(bytesPerSample)
-        let headerSize = 44
-        let totalSize = headerSize + dataSize
+    // MARK: - WAV (via AVAudioFile)
 
-        var header = Data()
-        header.append(contentsOf: [0x52, 0x49, 0x46, 0x46]) // RIFF
-        header.append(contentsOf: withUnsafeBytes(of: Int32(totalSize - 8)) { Data($0) })
-        header.append(contentsOf: [0x57, 0x41, 0x56, 0x45]) // WAVE
-        header.append(contentsOf: [0x66, 0x6D, 0x74, 0x20]) // fmt 
-        header.append(contentsOf: withUnsafeBytes(of: Int32(16)) { Data($0) }) // chunk size
-        header.append(contentsOf: withUnsafeBytes(of: Int16(1)) { Data($0) }) // PCM format
-        header.append(contentsOf: withUnsafeBytes(of: Int16(1)) { Data($0) }) // mono
-        header.append(contentsOf: withUnsafeBytes(of: Int32(sampleRateInt32)) { Data($0) }) // sample rate
-        let byteRate = sampleRateInt32 * Int32(bitsPerSample / 8) * Int32(numChannels)
-        header.append(contentsOf: withUnsafeBytes(of: Int32(byteRate)) { Data($0) })
-        let blockAlign = Int16(bitsPerSample / 8) * numChannels
-        header.append(contentsOf: withUnsafeBytes(of: Int16(blockAlign)) { Data($0) })
-        header.append(contentsOf: withUnsafeBytes(of: Int16(bitsPerSample)) { Data($0) })
-        header.append(contentsOf: [0x64, 0x61, 0x74, 0x61]) // data
-        header.append(contentsOf: withUnsafeBytes(of: Int32(dataSize)) { Data($0) })
+    private func saveWAV(samples: [Float], sampleRate: Int, to url: URL) -> Bool {
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: Double(sampleRate),
+            channels: 1,
+            interleaved: false
+        )!
+        let frameCount = AVAudioFrameCount(samples.count)
 
-        var wavData = header
-        var int16Samples = [Int16](repeating: 0, count: samples.count)
-        for (i, sample) in samples.enumerated() {
-            let clamped = max(-1.0, min(1.0, sample))
-            int16Samples[i] = Int16(clamped * Float(Int16.max))
-        }
-        wavData.append(contentsOf: withUnsafeBytes(of: &int16Samples) { Data($0) })
-
-        do {
-            try wavData.write(to: url, options: .atomic)
-            return true
-        } catch {
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
             return false
         }
+        buffer.frameLength = frameCount
+        if let dst = buffer.floatChannelData?[0] {
+            samples.withUnsafeBufferPointer { src in
+                guard let base = src.baseAddress else { return }
+                memcpy(dst, base, samples.count * MemoryLayout<Float>.size)
+            }
+        }
+
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: format.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+            try file.write(from: buffer)
+            return true
+        } catch {
+            AppLogger.shared.log(category: .audio, message: "WAV write failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    // MARK: - MP3 (direct LAME encoding)
+
+    private func saveMP3(samples: [Float], sampleRate: Int, bitrate: Int, to url: URL) -> Bool {
+        guard let encoder = MP3Encoder(sampleRate: sampleRate, channels: 1, bitrate: bitrate, quality: 2) else {
+            AppLogger.shared.log(category: .audio, message: "MP3: failed to init encoder")
+            return false
+        }
+        return encoder.encode(samples: samples, to: url)
+    }
+
+    // MARK: - Helpers
+
+    private func filename(for format: AudioSaveFormat) -> String {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        return "dictation_\(df.string(from: Date())).\(format.fileExtension)"
     }
 }

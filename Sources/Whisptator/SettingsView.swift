@@ -189,6 +189,24 @@ struct DictationSettingsTab: View {
                             }
                         }
                     }
+
+                    Picker("Format", selection: $settings.audioFormat) {
+                        ForEach(AudioSaveFormat.allCases, id: \.self) { fmt in
+                            Text(fmt.label).tag(fmt)
+                        }
+                    }
+
+                    if settings.audioFormat == .mp3 {
+                        HStack {
+                            Text("Bitrate: \(settings.mp3Bitrate) kbps")
+                            Spacer()
+                            Slider(value: Binding(
+                                get: { Double(settings.mp3Bitrate) },
+                                set: { settings.mp3Bitrate = Int($0) }
+                            ), in: 64...320, step: 32)
+                            .frame(width: 160)
+                        }
+                    }
                 }
             }
         }

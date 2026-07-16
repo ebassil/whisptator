@@ -122,7 +122,16 @@ public struct Snippet: Identifiable, Codable, Equatable, Sendable {
 public final class AppSettings: @unchecked Sendable {
     public var onSettingChange: ((String) -> Void)?
 
-    public init() {}
+    public init() {
+        if let raw = UserDefaults.standard.string(forKey: Key.audioFormat),
+           let fmt = AudioSaveFormat(rawValue: raw) {
+            audioFormat = fmt
+        }
+        let bitrate = UserDefaults.standard.integer(forKey: Key.mp3Bitrate)
+        if bitrate > 0 {
+            mp3Bitrate = bitrate
+        }
+    }
 
     // MARK: - Keys
 
@@ -151,6 +160,8 @@ public final class AppSettings: @unchecked Sendable {
         static let dualScreenMode = "dualScreenMode"
         static let saveAudioFiles = "saveAudioFiles"
         static let audioSaveLocation = "audioSaveLocation"
+        static let audioFormat = "audioFormat"
+        static let mp3Bitrate = "mp3Bitrate"
         static let isLoggingPaused = "logPaused"
         static let logEnabledCategories = "logEnabledCategories"
         static let selectedModelId = "selectedModelId"
@@ -308,6 +319,24 @@ public final class AppSettings: @unchecked Sendable {
     public var audioSaveLocation: String {
         get { UserDefaults.standard.string(forKey: Key.audioSaveLocation) ?? "\(NSHomeDirectory())/Documents/Whisptator/Audio" }
         set { UserDefaults.standard.set(newValue, forKey: Key.audioSaveLocation); onSettingChange?("audioSaveLocation") }
+    }
+
+    public var audioFormat: AudioSaveFormat = .wav {
+        didSet {
+            UserDefaults.standard.set(audioFormat.rawValue, forKey: Key.audioFormat)
+            onSettingChange?("audioFormat")
+        }
+    }
+
+    public var mp3Bitrate: Int = 256 {
+        didSet {
+            UserDefaults.standard.set(mp3Bitrate, forKey: Key.mp3Bitrate)
+            onSettingChange?("mp3Bitrate")
+        }
+    }
+
+    public var audioSaveSettings: AudioSaveSettings {
+        AudioSaveSettings(format: audioFormat, mp3Bitrate: mp3Bitrate)
     }
 
     // MARK: - Logging

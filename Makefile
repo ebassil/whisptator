@@ -41,16 +41,20 @@ PLIST = <?xml version="1.0" encoding="UTF-8"?>\n\
 
 build-debug:
 	swift build
-	mkdir -p $(DEBUG_APP)/Contents/MacOS $(DEBUG_APP)/Contents/Resources
+	mkdir -p $(DEBUG_APP)/Contents/MacOS $(DEBUG_APP)/Contents/Resources $(DEBUG_APP)/Contents/Frameworks
 	cp $(DEBUG_DIR)/$(APP_NAME) $(DEBUG_APP)/Contents/MacOS/$(APP_NAME)
+	cp -R .build/artifacts/lame-xcframework/LAME/LAME.xcframework/macos-arm64_x86_64/LAME.framework $(DEBUG_APP)/Contents/Frameworks/
+	install_name_tool -add_rpath @executable_path/../Frameworks $(DEBUG_APP)/Contents/MacOS/$(APP_NAME)
 	@printf '$(PLIST)' > $(DEBUG_APP)/Contents/Info.plist
 	codesign --force --sign $(CODESIGN_IDENTITY) --identifier $(BUNDLE_ID) $(DEBUG_APP)
 	@echo "Created $(DEBUG_APP)"
 
 build-release:
 	swift build -c release
-	mkdir -p $(RELEASE_APP)/Contents/MacOS $(RELEASE_APP)/Contents/Resources
+	mkdir -p $(RELEASE_APP)/Contents/MacOS $(RELEASE_APP)/Contents/Resources $(RELEASE_APP)/Contents/Frameworks
 	cp $(RELEASE_DIR)/$(APP_NAME) $(RELEASE_APP)/Contents/MacOS/$(APP_NAME)
+	cp -R .build/artifacts/lame-xcframework/LAME/LAME.xcframework/macos-arm64_x86_64/LAME.framework $(RELEASE_APP)/Contents/Frameworks/
+	install_name_tool -add_rpath @executable_path/../Frameworks $(RELEASE_APP)/Contents/MacOS/$(APP_NAME)
 	@printf '$(PLIST)' > $(RELEASE_APP)/Contents/Info.plist
 	codesign --force --sign $(CODESIGN_IDENTITY) --identifier $(BUNDLE_ID) $(RELEASE_APP)
 	@echo "Created $(RELEASE_APP)"

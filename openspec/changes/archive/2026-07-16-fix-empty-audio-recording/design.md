@@ -55,7 +55,7 @@ No lock synchronizes these accesses. `MeetingRecorder.mixedBuffers` uses `NSLock
 
 4. **Same pattern for MeetingRecorder** — Apply Decision 1 and 2 to `MeetingRecorder.stopRecording()`. The `meetingRecorder` already awaits `systemAudioCapture.stopCapture()`; the fix ensures `microphoneCapture.stopCapture` also completes before the state change.
 
-5. **Lock `recordedBuffers` access** — Add an `NSLock` to `DictationOrchestrator` for `recordedBuffers` to guard the data race between the session queue writer and the main thread reader. `MeetingRecorder.mixedBuffers` already has `lock`; ensure `mergeBuffers` acquires it.
+5. **Lock `recordedBuffers` access** — Add a serial `DispatchQueue` to `DictationOrchestrator` for `recordedBuffers` to guard the data race between the session queue writer and the main thread reader. `MeetingRecorder.mixedBuffers` already has `lock`; ensure `mergeBuffers` acquires it.
 
 ## Risks / Trade-offs
 

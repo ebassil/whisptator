@@ -10,6 +10,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/soniqo/speech-swift", branch: "main"),
+        .package(url: "https://github.com/BB9z/LAME-xcframework.git", from: "3.100.3"),
     ],
     targets: [
         .executableTarget(
@@ -24,6 +25,7 @@ let package = Package(
                 .product(name: "ParakeetStreamingASR", package: "speech-swift"),
                 .product(name: "NemotronStreamingASR", package: "speech-swift"),
                 .product(name: "OmnilingualASR", package: "speech-swift"),
+                .product(name: "LAME", package: "LAME-xcframework"),
             ]
         ),
         .testTarget(

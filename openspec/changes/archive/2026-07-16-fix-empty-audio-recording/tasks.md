@@ -22,8 +22,8 @@
 ## 4. Build & Verify
 
 - [x] 4.1 Build the project with `swift build` (debug) and `swift build -c release` — no compilation errors
-- [ ] 4.2 Start dictation, speak for 5+ seconds, stop recording
-- [ ] 4.3 Verify the saved audio file in `~/Documents/Whisptator/Audio/` is larger than 52 bytes and plays back correctly
-- [ ] 4.4 Start a meeting recording, let it run for 5+ seconds, stop
-- [ ] 4.5 Verify the meeting audio is captured and transcribed correctly
-- [ ] 4.6 Test push-to-talk mode specifically (since it has a rapid hold-release cycle)
+- [x] 4.2 Start dictation, speak for 5+ seconds, stop recording
+- [x] 4.3 Verify the saved audio file in `~/Documents/Whisptator/Audio/` is larger than 52 bytes and plays back correctly
+- [x] 4.4 Start a meeting recording, let it run for 5+ seconds, stop
+- [x] 4.5 Verify the meeting audio is captured and transcribed correctly
+- [x] 4.6 Test push-to-talk mode specifically (since it has a rapid hold-release cycle)
