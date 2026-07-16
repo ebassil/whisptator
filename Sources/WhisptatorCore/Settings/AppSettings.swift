@@ -131,6 +131,112 @@ public final class AppSettings: @unchecked Sendable {
         if bitrate > 0 {
             mp3Bitrate = bitrate
         }
+
+        if let data = UserDefaults.standard.data(forKey: Key.pushToTalkShortcut),
+           let decoded = try? JSONDecoder().decode(ShortcutKeyCode.self, from: data) {
+            pushToTalkShortcut = decoded
+        }
+        if let data = UserDefaults.standard.data(forKey: Key.handsFreeShortcut),
+           let decoded = try? JSONDecoder().decode(ShortcutKeyCode.self, from: data) {
+            handsFreeShortcut = decoded
+        }
+        if let data = UserDefaults.standard.data(forKey: Key.meetingShortcut),
+           let decoded = try? JSONDecoder().decode(ShortcutKeyCode.self, from: data) {
+            meetingShortcut = decoded
+        }
+
+        if let raw = UserDefaults.standard.string(forKey: Key.pasteMode),
+           let parsed = PasteMode(rawValue: raw) {
+            pasteMode = parsed
+        }
+        if let raw = UserDefaults.standard.string(forKey: Key.selectedAudioDeviceID) {
+            selectedAudioDeviceID = raw
+        }
+        if let raw = UserDefaults.standard.string(forKey: Key.language) {
+            language = raw
+        }
+
+        if let raw = UserDefaults.standard.string(forKey: Key.cleanupMode),
+           let parsed = CleanupMode(rawValue: raw) {
+            cleanupMode = parsed
+        }
+
+        if let data = UserDefaults.standard.data(forKey: Key.fillerWords),
+           let decoded = try? JSONDecoder().decode([FillerWord].self, from: data) {
+            fillerWords = decoded
+        }
+        if let data = UserDefaults.standard.data(forKey: Key.wordReplacements),
+           let decoded = try? JSONDecoder().decode([WordReplacement].self, from: data) {
+            wordReplacements = decoded
+        }
+        if let data = UserDefaults.standard.data(forKey: Key.snippets),
+           let decoded = try? JSONDecoder().decode([Snippet].self, from: data) {
+            snippets = decoded
+        }
+
+        if let raw = UserDefaults.standard.string(forKey: Key.meetingAudioSource),
+           let parsed = AudioSourceMode(rawValue: raw) {
+            meetingAudioSource = parsed
+        }
+        if let raw = UserDefaults.standard.string(forKey: Key.meetingRetention),
+           let parsed = AudioRetentionMode(rawValue: raw) {
+            meetingRetention = parsed
+        }
+        let meetingDays = UserDefaults.standard.integer(forKey: Key.meetingRetentionDays)
+        if meetingDays > 0 {
+            meetingRetentionDays = meetingDays
+        }
+        if let val = UserDefaults.standard.string(forKey: Key.meetingSaveLocation) {
+            meetingSaveLocation = val
+        }
+
+        if UserDefaults.standard.object(forKey: Key.launchAtLogin) != nil {
+            launchAtLogin = UserDefaults.standard.bool(forKey: Key.launchAtLogin)
+        }
+        if UserDefaults.standard.object(forKey: Key.showInDock) != nil {
+            showInDock = UserDefaults.standard.bool(forKey: Key.showInDock)
+        }
+        if UserDefaults.standard.object(forKey: Key.hasCompletedOnboarding) != nil {
+            hasCompletedOnboarding = UserDefaults.standard.bool(forKey: Key.hasCompletedOnboarding)
+        }
+        if UserDefaults.standard.object(forKey: Key.saveAudioFiles) != nil {
+            saveAudioFiles = UserDefaults.standard.bool(forKey: Key.saveAudioFiles)
+        }
+        if UserDefaults.standard.object(forKey: Key.isLoggingPaused) != nil {
+            isLoggingPaused = UserDefaults.standard.bool(forKey: Key.isLoggingPaused)
+        }
+
+        if UserDefaults.standard.object(forKey: Key.overlayEnabled) != nil {
+            overlayEnabled = UserDefaults.standard.bool(forKey: Key.overlayEnabled)
+        }
+        if let raw = UserDefaults.standard.string(forKey: Key.overlayPosition),
+           let parsed = OverlayPosition(rawValue: raw) {
+            overlayPosition = parsed
+        }
+        let opacity = UserDefaults.standard.double(forKey: Key.overlayOpacity)
+        if opacity != 0 {
+            overlayOpacity = opacity
+        }
+        let size = UserDefaults.standard.double(forKey: Key.overlaySize)
+        if size != 0 {
+            overlaySize = size
+        }
+        if let raw = UserDefaults.standard.string(forKey: Key.dualScreenMode),
+           let parsed = DualScreenMode(rawValue: raw) {
+            dualScreenMode = parsed
+        }
+
+        if let val = UserDefaults.standard.string(forKey: Key.audioSaveLocation) {
+            audioSaveLocation = val
+        }
+        if let raw = UserDefaults.standard.string(forKey: Key.selectedModelId) {
+            selectedModelId = raw
+        }
+
+        if let data = UserDefaults.standard.data(forKey: Key.logEnabledCategories),
+           let decoded = try? JSONDecoder().decode([String].self, from: data) {
+            logEnabledCategories = decoded
+        }
     }
 
     // MARK: - Keys
@@ -169,156 +275,197 @@ public final class AppSettings: @unchecked Sendable {
 
     // MARK: - Shortcuts
 
-    public var pushToTalkShortcut: ShortcutKeyCode {
-        get { Self.decode(ShortcutKeyCode.self, forKey: Key.pushToTalkShortcut) ?? ShortcutKeyCode(keyCode: 63, modifierFlags: 0) }
-        set { Self.encode(newValue, forKey: Key.pushToTalkShortcut); onSettingChange?("pushToTalkShortcut") }
+    public var pushToTalkShortcut: ShortcutKeyCode = ShortcutKeyCode(keyCode: 63, modifierFlags: 0) {
+        didSet {
+            Self.encode(pushToTalkShortcut, forKey: Key.pushToTalkShortcut)
+            onSettingChange?("pushToTalkShortcut")
+        }
     }
 
-    public var handsFreeShortcut: ShortcutKeyCode {
-        get { Self.decode(ShortcutKeyCode.self, forKey: Key.handsFreeShortcut) ?? ShortcutKeyCode(keyCode: 63, modifierFlags: 0) }
-        set { Self.encode(newValue, forKey: Key.handsFreeShortcut); onSettingChange?("handsFreeShortcut") }
+    public var handsFreeShortcut: ShortcutKeyCode = ShortcutKeyCode(keyCode: 63, modifierFlags: 0) {
+        didSet {
+            Self.encode(handsFreeShortcut, forKey: Key.handsFreeShortcut)
+            onSettingChange?("handsFreeShortcut")
+        }
     }
 
-    public var meetingShortcut: ShortcutKeyCode {
-        get { Self.decode(ShortcutKeyCode.self, forKey: Key.meetingShortcut) ?? ShortcutKeyCode(keyCode: 46, modifierFlags: UInt32(NSEvent.ModifierFlags.command.rawValue | NSEvent.ModifierFlags.option.rawValue)) }
-        set { Self.encode(newValue, forKey: Key.meetingShortcut); onSettingChange?("meetingShortcut") }
+    public var meetingShortcut: ShortcutKeyCode = ShortcutKeyCode(keyCode: 46, modifierFlags: UInt32(NSEvent.ModifierFlags.command.rawValue | NSEvent.ModifierFlags.option.rawValue)) {
+        didSet {
+            Self.encode(meetingShortcut, forKey: Key.meetingShortcut)
+            onSettingChange?("meetingShortcut")
+        }
     }
 
     // MARK: - Dictation
 
-    public var pasteMode: PasteMode {
-        get { PasteMode(rawValue: UserDefaults.standard.string(forKey: Key.pasteMode) ?? PasteMode.clipboard.rawValue) ?? .clipboard }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.pasteMode); onSettingChange?("pasteMode") }
+    public var pasteMode: PasteMode = .clipboard {
+        didSet {
+            UserDefaults.standard.set(pasteMode.rawValue, forKey: Key.pasteMode)
+            onSettingChange?("pasteMode")
+        }
     }
 
-    public var selectedAudioDeviceID: String {
-        get { UserDefaults.standard.string(forKey: Key.selectedAudioDeviceID) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Key.selectedAudioDeviceID); onSettingChange?("selectedAudioDeviceID") }
+    public var selectedAudioDeviceID: String = "" {
+        didSet {
+            UserDefaults.standard.set(selectedAudioDeviceID, forKey: Key.selectedAudioDeviceID)
+            onSettingChange?("selectedAudioDeviceID")
+        }
     }
 
-    public var language: String {
-        get { UserDefaults.standard.string(forKey: Key.language) ?? "auto" }
-        set { UserDefaults.standard.set(newValue, forKey: Key.language); onSettingChange?("language") }
+    public var language: String = "auto" {
+        didSet {
+            UserDefaults.standard.set(language, forKey: Key.language)
+            onSettingChange?("language")
+        }
     }
 
     // MARK: - Cleanup
 
-    public var cleanupMode: CleanupMode {
-        get { CleanupMode(rawValue: UserDefaults.standard.string(forKey: Key.cleanupMode) ?? CleanupMode.clean.rawValue) ?? .clean }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.cleanupMode); onSettingChange?("cleanupMode") }
+    public var cleanupMode: CleanupMode = .clean {
+        didSet {
+            UserDefaults.standard.set(cleanupMode.rawValue, forKey: Key.cleanupMode)
+            onSettingChange?("cleanupMode")
+        }
     }
 
-    public var fillerWords: [FillerWord] {
-        get { Self.decode([FillerWord].self, forKey: Key.fillerWords) ?? Self.defaultFillerWords }
-        set { Self.encode(newValue, forKey: Key.fillerWords); onSettingChange?("fillerWords") }
+    public var fillerWords: [FillerWord] = AppSettings.defaultFillerWords {
+        didSet {
+            Self.encode(fillerWords, forKey: Key.fillerWords)
+            onSettingChange?("fillerWords")
+        }
     }
 
-    public var wordReplacements: [WordReplacement] {
-        get { Self.decode([WordReplacement].self, forKey: Key.wordReplacements) ?? [] }
-        set { Self.encode(newValue, forKey: Key.wordReplacements); onSettingChange?("wordReplacements") }
+    public var wordReplacements: [WordReplacement] = [] {
+        didSet {
+            Self.encode(wordReplacements, forKey: Key.wordReplacements)
+            onSettingChange?("wordReplacements")
+        }
     }
 
-    public var snippets: [Snippet] {
-        get { Self.decode([Snippet].self, forKey: Key.snippets) ?? [] }
-        set { Self.encode(newValue, forKey: Key.snippets); onSettingChange?("snippets") }
+    public var snippets: [Snippet] = [] {
+        didSet {
+            Self.encode(snippets, forKey: Key.snippets)
+            onSettingChange?("snippets")
+        }
     }
 
     // MARK: - Meeting
 
-    public var meetingAudioSource: AudioSourceMode {
-        get { AudioSourceMode(rawValue: UserDefaults.standard.string(forKey: Key.meetingAudioSource) ?? AudioSourceMode.systemAndMicrophone.rawValue) ?? .systemAndMicrophone }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.meetingAudioSource); onSettingChange?("meetingAudioSource") }
+    public var meetingAudioSource: AudioSourceMode = .systemAndMicrophone {
+        didSet {
+            UserDefaults.standard.set(meetingAudioSource.rawValue, forKey: Key.meetingAudioSource)
+            onSettingChange?("meetingAudioSource")
+        }
     }
 
-    public var meetingRetention: AudioRetentionMode {
-        get { AudioRetentionMode(rawValue: UserDefaults.standard.string(forKey: Key.meetingRetention) ?? AudioRetentionMode.deleteAfterTranscription.rawValue) ?? .deleteAfterTranscription }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.meetingRetention); onSettingChange?("meetingRetention") }
+    public var meetingRetention: AudioRetentionMode = .deleteAfterTranscription {
+        didSet {
+            UserDefaults.standard.set(meetingRetention.rawValue, forKey: Key.meetingRetention)
+            onSettingChange?("meetingRetention")
+        }
     }
 
-    public var meetingRetentionDays: Int {
-        get { UserDefaults.standard.integer(forKey: Key.meetingRetentionDays) == 0 ? 30 : UserDefaults.standard.integer(forKey: Key.meetingRetentionDays) }
-        set { UserDefaults.standard.set(newValue, forKey: Key.meetingRetentionDays); onSettingChange?("meetingRetentionDays") }
+    public var meetingRetentionDays: Int = 30 {
+        didSet {
+            UserDefaults.standard.set(meetingRetentionDays, forKey: Key.meetingRetentionDays)
+            onSettingChange?("meetingRetentionDays")
+        }
     }
 
-    public var meetingSaveLocation: String {
-        get { UserDefaults.standard.string(forKey: Key.meetingSaveLocation) ?? "\(NSHomeDirectory())/Documents/Whisptator/Meetings" }
-        set { UserDefaults.standard.set(newValue, forKey: Key.meetingSaveLocation); onSettingChange?("meetingSaveLocation") }
+    public var meetingSaveLocation: String = "\(NSHomeDirectory())/Documents/Whisptator/Meetings" {
+        didSet {
+            UserDefaults.standard.set(meetingSaveLocation, forKey: Key.meetingSaveLocation)
+            onSettingChange?("meetingSaveLocation")
+        }
     }
 
     // MARK: - General
 
-    public var launchAtLogin: Bool {
-        get { UserDefaults.standard.bool(forKey: Key.launchAtLogin) }
-        set { UserDefaults.standard.set(newValue, forKey: Key.launchAtLogin); onSettingChange?("launchAtLogin") }
+    public var launchAtLogin: Bool = false {
+        didSet {
+            UserDefaults.standard.set(launchAtLogin, forKey: Key.launchAtLogin)
+            onSettingChange?("launchAtLogin")
+        }
     }
 
-    public var showInDock: Bool {
-        get { UserDefaults.standard.bool(forKey: Key.showInDock) }
-        set {
-            UserDefaults.standard.set(newValue, forKey: Key.showInDock)
+    public var showInDock: Bool = false {
+        didSet {
+            UserDefaults.standard.set(showInDock, forKey: Key.showInDock)
             onSettingChange?("showInDock")
             Task { @MainActor in
-                let policy: NSApplication.ActivationPolicy = newValue ? .regular : .accessory
+                let policy: NSApplication.ActivationPolicy = showInDock ? .regular : .accessory
                 NSApp.setActivationPolicy(policy)
             }
         }
     }
 
-    public var hasCompletedOnboarding: Bool {
-        get { UserDefaults.standard.bool(forKey: Key.hasCompletedOnboarding) }
-        set { UserDefaults.standard.set(newValue, forKey: Key.hasCompletedOnboarding); onSettingChange?("hasCompletedOnboarding") }
+    public var hasCompletedOnboarding: Bool = false {
+        didSet {
+            UserDefaults.standard.set(hasCompletedOnboarding, forKey: Key.hasCompletedOnboarding)
+            onSettingChange?("hasCompletedOnboarding")
+        }
     }
 
     // MARK: - Model
 
-    public var selectedModelId: String {
-        get { UserDefaults.standard.string(forKey: Key.selectedModelId) ?? SupportedModel.default.id }
-        set { UserDefaults.standard.set(newValue, forKey: Key.selectedModelId); onSettingChange?("selectedModelId") }
+    public var selectedModelId: String = SupportedModel.default.id {
+        didSet {
+            UserDefaults.standard.set(selectedModelId, forKey: Key.selectedModelId)
+            onSettingChange?("selectedModelId")
+        }
     }
 
     // MARK: - Overlay
 
-    public var overlayEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: Key.overlayEnabled) == nil ? true : UserDefaults.standard.bool(forKey: Key.overlayEnabled) }
-        set { UserDefaults.standard.set(newValue, forKey: Key.overlayEnabled); onSettingChange?("overlayEnabled") }
-    }
-
-    public var overlayPosition: OverlayPosition {
-        get { OverlayPosition(rawValue: UserDefaults.standard.string(forKey: Key.overlayPosition) ?? OverlayPosition.center.rawValue) ?? .center }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.overlayPosition); onSettingChange?("overlayPosition") }
-    }
-
-    public var overlayOpacity: Double {
-        get {
-            let val = UserDefaults.standard.double(forKey: Key.overlayOpacity)
-            return val == 0 ? 0.85 : val
+    public var overlayEnabled: Bool = true {
+        didSet {
+            UserDefaults.standard.set(overlayEnabled, forKey: Key.overlayEnabled)
+            onSettingChange?("overlayEnabled")
         }
-        set { UserDefaults.standard.set(newValue, forKey: Key.overlayOpacity); onSettingChange?("overlayOpacity") }
     }
 
-    public var overlaySize: Double {
-        get {
-            let val = UserDefaults.standard.double(forKey: Key.overlaySize)
-            return val == 0 ? 1.0 : val
+    public var overlayPosition: OverlayPosition = .center {
+        didSet {
+            UserDefaults.standard.set(overlayPosition.rawValue, forKey: Key.overlayPosition)
+            onSettingChange?("overlayPosition")
         }
-        set { UserDefaults.standard.set(newValue, forKey: Key.overlaySize); onSettingChange?("overlaySize") }
     }
 
-    public var dualScreenMode: DualScreenMode {
-        get { DualScreenMode(rawValue: UserDefaults.standard.string(forKey: Key.dualScreenMode) ?? DualScreenMode.primaryOnly.rawValue) ?? .primaryOnly }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.dualScreenMode); onSettingChange?("dualScreenMode") }
+    public var overlayOpacity: Double = 0.85 {
+        didSet {
+            UserDefaults.standard.set(overlayOpacity, forKey: Key.overlayOpacity)
+            onSettingChange?("overlayOpacity")
+        }
+    }
+
+    public var overlaySize: Double = 1.0 {
+        didSet {
+            UserDefaults.standard.set(overlaySize, forKey: Key.overlaySize)
+            onSettingChange?("overlaySize")
+        }
+    }
+
+    public var dualScreenMode: DualScreenMode = .primaryOnly {
+        didSet {
+            UserDefaults.standard.set(dualScreenMode.rawValue, forKey: Key.dualScreenMode)
+            onSettingChange?("dualScreenMode")
+        }
     }
 
     // MARK: - Audio Save
 
-    public var saveAudioFiles: Bool {
-        get { UserDefaults.standard.bool(forKey: Key.saveAudioFiles) }
-        set { UserDefaults.standard.set(newValue, forKey: Key.saveAudioFiles); onSettingChange?("saveAudioFiles") }
+    public var saveAudioFiles: Bool = false {
+        didSet {
+            UserDefaults.standard.set(saveAudioFiles, forKey: Key.saveAudioFiles)
+            onSettingChange?("saveAudioFiles")
+        }
     }
 
-    public var audioSaveLocation: String {
-        get { UserDefaults.standard.string(forKey: Key.audioSaveLocation) ?? "\(NSHomeDirectory())/Documents/Whisptator/Audio" }
-        set { UserDefaults.standard.set(newValue, forKey: Key.audioSaveLocation); onSettingChange?("audioSaveLocation") }
+    public var audioSaveLocation: String = "\(NSHomeDirectory())/Documents/Whisptator/Audio" {
+        didSet {
+            UserDefaults.standard.set(audioSaveLocation, forKey: Key.audioSaveLocation)
+            onSettingChange?("audioSaveLocation")
+        }
     }
 
     public var audioFormat: AudioSaveFormat = .wav {
@@ -341,14 +488,18 @@ public final class AppSettings: @unchecked Sendable {
 
     // MARK: - Logging
 
-    public var isLoggingPaused: Bool {
-        get { UserDefaults.standard.bool(forKey: Key.isLoggingPaused) }
-        set { UserDefaults.standard.set(newValue, forKey: Key.isLoggingPaused); onSettingChange?("isLoggingPaused") }
+    public var isLoggingPaused: Bool = false {
+        didSet {
+            UserDefaults.standard.set(isLoggingPaused, forKey: Key.isLoggingPaused)
+            onSettingChange?("isLoggingPaused")
+        }
     }
 
-    public var logEnabledCategories: [String] {
-        get { Self.decode([String].self, forKey: Key.logEnabledCategories) ?? LogCategory.allCases.map(\.rawValue) }
-        set { Self.encode(newValue, forKey: Key.logEnabledCategories); onSettingChange?("logEnabledCategories") }
+    public var logEnabledCategories: [String] = LogCategory.allCases.map(\.rawValue) {
+        didSet {
+            Self.encode(logEnabledCategories, forKey: Key.logEnabledCategories)
+            onSettingChange?("logEnabledCategories")
+        }
     }
 
     // MARK: - Defaults
