@@ -15,13 +15,8 @@ struct MenuBarView: View {
             }
             Divider()
             SettingsLink()
-            Divider()
-            Button("Quit") {
-                coordinator.stop()
-                NSApplication.shared.terminate(nil)
-            }
         } label: {
-            Image(systemName: "mic.circle")
+            Label("Settings", systemImage: "mic.circle")
         }
     }
 }

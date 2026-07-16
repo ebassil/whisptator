@@ -15,7 +15,7 @@ The system SHALL display a status item in the macOS menu bar when the applicatio
 
 #### Scenario: Status item menu
 - **WHEN** the user clicks the status item
-- **THEN** a popover or menu is displayed with options: Start Dictation, Start Meeting, History, Settings, Quit
+- **THEN** a popover or menu is displayed with options: Start Dictation, Start Meeting, About, Settings, Quit
 
 ### Requirement: Floating recording HUD
 The system SHALL display a small floating panel during active recording (dictation or meeting) showing the recording status and elapsed time.
