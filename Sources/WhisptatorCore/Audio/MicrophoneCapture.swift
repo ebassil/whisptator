@@ -28,9 +28,14 @@ public final class MicrophoneCapture: NSObject, @unchecked Sendable {
         }
     }
 
-    public func stopCapture() {
+    public func stopCapture(completion: (@Sendable () -> Void)? = nil) {
         sessionQueue.async { [weak self] in
             self?.performStopCapture()
+            if let completion {
+                DispatchQueue.main.async {
+                    completion()
+                }
+            }
         }
     }
 
@@ -66,6 +71,13 @@ public final class MicrophoneCapture: NSObject, @unchecked Sendable {
             }
 
             let output = AVCaptureAudioDataOutput()
+            output.audioSettings = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
+                AVNumberOfChannelsKey: 1,
+                AVSampleRateKey: 48000
+            ]
             output.setSampleBufferDelegate(self, queue: sessionQueue)
             if session.canAddOutput(output) {
                 session.addOutput(output)
@@ -78,6 +90,11 @@ public final class MicrophoneCapture: NSObject, @unchecked Sendable {
             audioOutput = output
             captureSession = session
             session.startRunning()
+            guard captureSession?.isRunning == true else {
+                AppLogger.shared.log(category: .audio, message: "Microphone error: session failed to start")
+                delegate?.microphoneCapture(self, didFailWithError: MicrophoneError.sessionFailedToStart)
+                return
+            }
             isCapturing = true
             AppLogger.shared.log(category: .audio, message: "Microphone capture started (device: \(device.localizedName))")
             delegate?.microphoneCaptureDidStart(self)
@@ -140,16 +157,30 @@ extension MicrophoneCapture: AVCaptureAudioDataOutputSampleBufferDelegate {
         from connection: AVCaptureConnection
     ) {
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else { return }
-        let audioFormat = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)?.pointee
-
-        guard let avFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: audioFormat?.mSampleRate ?? 48000,
-            channels: AVAudioChannelCount(audioFormat?.mChannelsPerFrame ?? 1),
-            interleaved: false
-        ) else { return }
+        let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)?.pointee
 
         let frameCount = AVAudioFrameCount(CMSampleBufferGetNumSamples(sampleBuffer))
+        guard frameCount > 0 else { return }
+
+        let avFormat: AVAudioFormat
+        if let asbd, asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0 {
+            guard let fmt = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: asbd.mSampleRate,
+                channels: AVAudioChannelCount(asbd.mChannelsPerFrame),
+                interleaved: false
+            ) else { return }
+            avFormat = fmt
+        } else {
+            guard let fmt = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 48000,
+                channels: 1,
+                interleaved: false
+            ) else { return }
+            avFormat = fmt
+        }
+
         guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: avFormat, frameCapacity: frameCount) else { return }
         pcmBuffer.frameLength = frameCount
 
@@ -157,10 +188,14 @@ extension MicrophoneCapture: AVCaptureAudioDataOutputSampleBufferDelegate {
         var dataLength = 0
         var dataPointer: UnsafeMutablePointer<Int8>?
         CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &dataLength, dataPointerOut: &dataPointer)
+        guard let srcPointer = dataPointer, let dstPointer = pcmBuffer.floatChannelData?[0] else { return }
 
-        if let srcPointer = dataPointer, let dstPointer = pcmBuffer.floatChannelData?[0] {
-            let byteCount = min(dataLength, Int(frameCount) * MemoryLayout<Float>.size)
-            memcpy(dstPointer, srcPointer, byteCount)
+        let expectedBytes = Int(frameCount) * MemoryLayout<Float>.size
+        let bytesToCopy = min(dataLength, expectedBytes)
+        memcpy(dstPointer, srcPointer, bytesToCopy)
+
+        if bytesToCopy < expectedBytes {
+            memset(dstPointer + bytesToCopy, 0, expectedBytes - bytesToCopy)
         }
 
         delegate?.microphoneCapture(self, didCaptureAudio: pcmBuffer)
@@ -171,12 +206,14 @@ public enum MicrophoneError: Error, LocalizedError {
     case deviceNotFound
     case cannotAddInput
     case cannotAddOutput
+    case sessionFailedToStart
 
     public var errorDescription: String? {
         switch self {
         case .deviceNotFound: return "Audio input device not found."
         case .cannotAddInput: return "Cannot add audio input to capture session."
         case .cannotAddOutput: return "Cannot add audio output to capture session."
+        case .sessionFailedToStart: return "Audio capture session failed to start."
         }
     }
 }

@@ -12,7 +12,13 @@ public final class TranscriptionEngine: @unchecked Sendable {
         guard modelManager.isModelLoaded else {
             throw ModelError.modelNotLoaded
         }
-        AppLogger.shared.log(category: .transcription, message: "Transcription started (samples: \(audio.count), sampleRate: \(sampleRate))")
+        let modelInfo: String = {
+            if let m = modelManager.selectedModel {
+                return "\(m.name) (\(m.type.rawValue), \(m.id))"
+            }
+            return modelManager.selectedModelId
+        }()
+        AppLogger.shared.log(category: .transcription, message: "Transcription started (model: \(modelInfo), samples: \(audio.count), sampleRate: \(sampleRate))")
         do {
             let result = try await modelManager.transcribe(audio: audio, sampleRate: sampleRate, language: language)
             AppLogger.shared.log(category: .transcription, message: "Transcription completed (text length: \(result.count))")

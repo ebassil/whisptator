@@ -64,6 +64,7 @@ public final class ModelManager: @unchecked Sendable {
             model = loadedModel
             downloadStatus = .loaded
             onStatusChange?(downloadStatus)
+            logHubCacheLocation()
             AppLogger.shared.log(category: .model, message: "Model loaded successfully")
         } catch {
             downloadStatus = .failed(error)
@@ -78,6 +79,7 @@ public final class ModelManager: @unchecked Sendable {
             model = loadedModel
             downloadStatus = .loaded
             onStatusChange?(downloadStatus)
+            logHubCacheLocation()
             AppLogger.shared.log(category: .model, message: "Model loaded from cache")
         } catch {
             downloadStatus = .failed(error)
@@ -341,8 +343,10 @@ extension ModelManager {
         do {
             try FileManager.default.createDirectory(at: newDir, withIntermediateDirectories: true)
             for entry in legacyContents {
+                guard !entry.hasPrefix(".") else { continue }
                 let source = legacyDir.appendingPathComponent(entry)
                 let dest = newDir.appendingPathComponent(entry)
+                if FileManager.default.fileExists(atPath: dest.path) { continue }
                 try FileManager.default.moveItem(at: source, to: dest)
             }
             AppLogger.shared.log(category: .model, message: "Migrated old cache to subdirectory")
@@ -356,6 +360,32 @@ extension ModelManager {
             .replacingOccurrences(of: "/", with: "--")
             .replacingOccurrences(of: ".", with: "_")
         return modelsRootDir.appendingPathComponent(dirName, isDirectory: true)
+    }
+
+    private func logHubCacheLocation() {
+        let fm = FileManager.default
+        let cachePath = modelCacheDir.path
+        let totalSize = recursiveDirectorySize(fm, at: modelCacheDir)
+        let sizeStr = ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file)
+        AppLogger.shared.log(category: .model, message: "Model disk usage: \(sizeStr) at \(cachePath)")
+        let hubDir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".cache/huggingface/hub")
+        if fm.fileExists(atPath: hubDir.path) {
+            let hubSize = recursiveDirectorySize(fm, at: hubDir)
+            let hubStr = ByteCountFormatter.string(fromByteCount: hubSize, countStyle: .file)
+            AppLogger.shared.log(category: .model, message: "HF hub cache total size: \(hubStr)")
+        }
+    }
+
+    private func recursiveDirectorySize(_ fm: FileManager, at url: URL) -> Int64 {
+        guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: nil) else { return 0 }
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path) else { continue }
+            let fileType = attrs[.type] as? FileAttributeType
+            if fileType == .typeDirectory { continue }
+            total += (attrs[.size] as? Int64) ?? 0
+        }
+        return total
     }
 }
 

@@ -80,12 +80,19 @@ public final class MeetingRecorder: @unchecked Sendable {
 
     public func stopRecording() async {
         guard currentState == .recording else { return }
-        currentState = .transcribing
-        AppLogger.shared.log(category: .meeting, message: "Meeting recording stopped, starting transcription")
+        AppLogger.shared.log(category: .meeting, message: "Meeting recording stopping")
 
-        microphoneCapture.stopCapture()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            microphoneCapture.stopCapture {
+                continuation.resume()
+            }
+        }
+
         await systemAudioCapture.stopCapture()
         audioMixer.stop()
+
+        currentState = .transcribing
+        AppLogger.shared.log(category: .meeting, message: "Meeting recording stopped, starting transcription")
 
         do {
             let allSamples = mergeBuffers(mixedBuffers)
@@ -143,7 +150,6 @@ public final class MeetingRecorder: @unchecked Sendable {
 
 extension MeetingRecorder: SystemAudioCaptureDelegate {
     public func systemAudioCapture(_ capture: SystemAudioCapture, didCaptureAudio buffer: AVAudioPCMBuffer) {
-        guard currentState == .recording else { return }
         addBuffer(buffer)
     }
 
@@ -159,7 +165,6 @@ extension MeetingRecorder: SystemAudioCaptureDelegate {
 
 extension MeetingRecorder: MicrophoneCaptureDelegate {
     public func microphoneCapture(_ capture: MicrophoneCapture, didCaptureAudio buffer: AVAudioPCMBuffer) {
-        guard currentState == .recording else { return }
         addBuffer(buffer)
     }
 

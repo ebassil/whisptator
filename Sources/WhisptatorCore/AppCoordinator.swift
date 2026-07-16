@@ -39,6 +39,7 @@ public final class AppCoordinator: ObservableObject {
     public func start() throws {
         AppLogger.shared.log(category: .system, message: "AppCoordinator started")
         try dictationOrchestrator.start()
+        Task { await modelManager.loadModelOffline() }
     }
 
     public func stop() {
