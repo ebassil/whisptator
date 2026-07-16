@@ -20,6 +20,10 @@ let package = Package(
             name: "WhisptatorCore",
             dependencies: [
                 .product(name: "WhisperASR", package: "speech-swift"),
+                .product(name: "ParakeetASR", package: "speech-swift"),
+                .product(name: "ParakeetStreamingASR", package: "speech-swift"),
+                .product(name: "NemotronStreamingASR", package: "speech-swift"),
+                .product(name: "OmnilingualASR", package: "speech-swift"),
             ]
         ),
         .testTarget(

@@ -153,6 +153,7 @@ public final class AppSettings: @unchecked Sendable {
         static let audioSaveLocation = "audioSaveLocation"
         static let isLoggingPaused = "logPaused"
         static let logEnabledCategories = "logEnabledCategories"
+        static let selectedModelId = "selectedModelId"
     }
 
     // MARK: - Shortcuts
@@ -255,6 +256,13 @@ public final class AppSettings: @unchecked Sendable {
     public var hasCompletedOnboarding: Bool {
         get { UserDefaults.standard.bool(forKey: Key.hasCompletedOnboarding) }
         set { UserDefaults.standard.set(newValue, forKey: Key.hasCompletedOnboarding); onSettingChange?("hasCompletedOnboarding") }
+    }
+
+    // MARK: - Model
+
+    public var selectedModelId: String {
+        get { UserDefaults.standard.string(forKey: Key.selectedModelId) ?? SupportedModel.default.id }
+        set { UserDefaults.standard.set(newValue, forKey: Key.selectedModelId); onSettingChange?("selectedModelId") }
     }
 
     // MARK: - Overlay

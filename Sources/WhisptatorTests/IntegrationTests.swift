@@ -54,9 +54,12 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(content, "Test paste content")
     }
 
-    func testModelManagerCacheDir() {
+    func testModelManagerAvailableModels() {
         let manager = ModelManager()
-        XCTAssertTrue(manager.modelCacheDir.path.contains("Whisptator/Models"))
+        XCTAssertFalse(manager.availableModels.isEmpty)
+        XCTAssertEqual(manager.availableModels.count, 5)
+        XCTAssertEqual(manager.selectedModelId, SupportedModel.default.id)
+        XCTAssertEqual(manager.selectedModel?.type, .whisper)
     }
 
     func testPermissionGateChecks() {

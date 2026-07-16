@@ -272,7 +272,10 @@ struct LogsSettingsTab: View {
     private func saveLogsToCSV() {
         let panel = NSSavePanel()
         panel.title = "Save Logs"
-        panel.nameFieldStringValue = "whisptator-logs-\(ISO8601DateFormatter().string(from: Date())).csv"
+
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        panel.nameFieldStringValue = "whisptator-logs-\(df.string(from: Date())).csv"
         panel.allowedContentTypes = [.commaSeparatedText]
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -287,7 +290,11 @@ struct LogsSettingsTab: View {
             csv += "\(ts),\(entry.category.rawValue),\(msg)\n"
         }
 
-        try? csv.write(to: url, atomically: true, encoding: .utf8)
+        do {
+            try csv.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            print("Failed to save CSV logs: \(error)")
+        }
     }
 }
 
@@ -367,51 +374,125 @@ struct CategoryBadge: View {
 struct ModelSettingsTab: View {
     @Bindable var settings: AppSettings
     var modelManager: ModelManager
+    @State private var hubCacheStatuses: [String: Bool] = [:]
 
     var body: some View {
-        Form {
-            Section("Whisper Model") {
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text("Whisper Large-v3 Turbo (CoreML)")
-                            .font(.headline)
-                        Text("aufklarer/Whisper-Large-v3-Turbo-CoreML")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    switch modelManager.downloadStatus {
-                    case .notStarted:
-                        Button("Download") {
-                            Task { await modelManager.loadModel() }
-                        }
-                    case .downloading(let progress, let message):
-                        VStack(alignment: .trailing) {
-                            ProgressView(value: progress)
-                            Text(message)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    case .loaded:
-                        Label("Loaded", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                    case .failed(let error):
-                        VStack(alignment: .trailing) {
-                            Label("Failed", systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
-                            Text(error.localizedDescription)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Button("Retry") {
+        VStack(spacing: 0) {
+            List {
+                Section("Available ASR Models") {
+                    ForEach(modelManager.availableModels) { model in
+                        ModelRow(
+                            model: model,
+                            isSelected: modelManager.isSelected(model.id),
+                            isCached: hubCacheStatuses[model.id] ?? false,
+                            downloadStatus: modelManager.isSelected(model.id) ? modelManager.downloadStatus : .notStarted,
+                            selectAction: {
+                                modelManager.selectModel(model.id)
+                            },
+                            downloadAction: {
+                                Task { await modelManager.loadModel() }
+                            },
+                            retryAction: {
                                 Task { await modelManager.loadModel() }
                             }
-                        }
+                        )
                     }
                 }
             }
+            .listStyle(.inset)
         }
-        .formStyle(.grouped)
-        .padding()
+        .onAppear {
+            refreshHubCacheStatus()
+        }
+    }
+
+    private func refreshHubCacheStatus() {
+        var statuses: [String: Bool] = [:]
+        for model in modelManager.availableModels {
+            statuses[model.id] = modelManager.hubCacheStatus(for: model.id)
+        }
+        hubCacheStatuses = statuses
+    }
+}
+
+struct ModelRow: View {
+    let model: SupportedModel
+    let isSelected: Bool
+    let isCached: Bool
+    let downloadStatus: ModelDownloadStatus
+    let selectAction: () -> Void
+    let downloadAction: () -> Void
+    let retryAction: () -> Void
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(model.name)
+                    .font(.headline)
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+
+                Text(model.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                HStack(spacing: 8) {
+                    Text(model.sizeLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+
+                    if isCached {
+                        Label("Cached", systemImage: "externaldrive.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.blue)
+                    }
+                }
+            }
+
+            Spacer()
+
+            if isSelected {
+                switch downloadStatus {
+                case .notStarted:
+                    Button("Download") {
+                        downloadAction()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                case .downloading(let progress, let message):
+                    VStack(alignment: .trailing, spacing: 2) {
+                        ProgressView(value: progress)
+                            .frame(width: 100)
+                        Text(message)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                case .loaded:
+                    Label("Loaded", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                case .failed(let error):
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Label("Failed", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text(error.localizedDescription)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Button("Retry", action: retryAction)
+                            .buttonStyle(.plain)
+                            .font(.caption)
+                            .foregroundStyle(.blue)
+                    }
+                }
+            } else {
+                Button("Select") {
+                    selectAction()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 

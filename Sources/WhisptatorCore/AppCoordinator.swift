@@ -18,7 +18,7 @@ public final class AppCoordinator: ObservableObject {
 
     public init() {
         self.settings = AppSettings()
-        self.modelManager = ModelManager()
+        self.modelManager = ModelManager(selectedModelId: settings.selectedModelId)
         self.dictationOrchestrator = DictationOrchestrator(settings: settings, modelManager: modelManager)
         self.meetingRecorder = MeetingRecorder(settings: settings, modelManager: modelManager)
         self.overlayController = OverlayController(settings: settings)
