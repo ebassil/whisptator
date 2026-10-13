@@ -145,6 +145,15 @@ public final class MeetingRecorder: @unchecked Sendable {
         let drainTimeout = max(30.0, Double(pending) * 20.0)
         _ = await pipeline.finalize(drainTimeout: drainTimeout)
 
+        if let echo = pipeline.echoDiagnostics {
+            AppLogger.shared.log(
+                category: .meeting,
+                message: echo.isTrusted
+                    ? String(format: "Echo gate: lag %.0f ms, gain %.2f, %d local / %d echo frames suppressed to %d", echo.lagSeconds * 1000, echo.gain, echo.localFrames, echo.echoFrames, echo.suppressedFrames)
+                    : "Echo gate: no echo path learned this session (no suppression applied)"
+            )
+        }
+
         let sessionInfo = MeetingSessionInfo(transcriptURL: pipeline.transcriptURL, audioURL: pipeline.audioURL)
 
         if settings.speakerIdentificationEnabled {
@@ -153,10 +162,15 @@ public final class MeetingRecorder: @unchecked Sendable {
             if let diarizer = setup.diarizer, await diarizer.isReady {
                 do {
                     let segments = try await diarizer.diarize(mp3URL: pipeline.audioURL)
+                    AppLogger.shared.log(
+                        category: .meeting,
+                        message: "Diarization produced \(segments.count) segments for \(Set(segments.map(\.speaker)).count) speaker(s)"
+                    )
                     let relabeled = try TranscriptRelabeler.relabel(
                         transcriptURL: pipeline.transcriptURL,
                         audioURL: pipeline.audioURL,
-                        segments: segments
+                        segments: segments,
+                        ledger: pipeline.ledger
                     )
                     AppLogger.shared.log(category: .meeting, message: "Speaker labels applied to \(relabeled.path)")
                 } catch {
@@ -204,9 +218,12 @@ public final class MeetingRecorder: @unchecked Sendable {
         let pipeline = self.textCleanupPipeline
         let modeSnapshot = settings.cleanupMode
         return { raw in
-            guard modeSnapshot == .clean else { return raw }
+            // Recognition loops are decoding artifacts, not speech, so they are
+            // collapsed even when the user asked for verbatim text.
+            let delooped = RepetitionCollapser.collapse(raw)
+            guard modeSnapshot == .clean else { return delooped }
             return pipeline.process(
-                raw,
+                delooped,
                 mode: modeSnapshot,
                 fillerWords: settings.fillerWords,
                 wordReplacements: settings.wordReplacements,

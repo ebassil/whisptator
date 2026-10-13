@@ -47,6 +47,12 @@ public enum DiarizationAudio {
     /// Streams the file in `chunkSeconds` pieces, emitting per-channel 16 kHz
     /// mono arrays (channel 0 = mic/left, channel 1 = system/right; mono files
     /// only emit channel 0).
+    ///
+    /// One resampler per channel is kept alive for the whole stream: a fresh
+    /// `AVAudioConverter` per chunk restarts the interpolation filter at every
+    /// boundary, which smears the audio that diarization embeds, and its
+    /// retained samples shift the output against the timeline it is compared
+    /// with.
     public static func stream16kHzChunks(
         of mp3URL: URL,
         chunkSeconds: Double,
@@ -64,6 +70,10 @@ public enum DiarizationAudio {
         guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(framesPerChunk)) else {
             throw DiarizationAudioError.unreadable(mp3URL)
         }
+        let outRate = 16_000.0
+        let resamplers = (0..<channels).map { _ in StreamResampler(sourceRate: rate, targetRate: outRate) }
+        var emitted = [Int](repeating: 0, count: channels)
+
         var absoluteFrame: AVAudioFramePosition = 0
         while absoluteFrame < file.length {
             do {
@@ -79,11 +89,19 @@ public enum DiarizationAudio {
             guard let data = buffer.floatChannelData else { break }
             for ch in 0..<channels {
                 let samples = Array(UnsafeBufferPointer(start: data[ch], count: Int(buffer.frameLength)))
-                let mono16 = AudioResampling.to16kHzMono(samples, from: rate)
-                let startSample = Int(Double(absoluteFrame) * 16_000.0 / rate)
+                let mono16 = resamplers[ch].append(samples)
+                let startSample = emitted[ch]
+                emitted[ch] += mono16.count
                 try handler(ch, startSample, mono16)
             }
             absoluteFrame += AVAudioFramePosition(buffer.frameLength)
+        }
+        for ch in 0..<channels {
+            let tail = resamplers[ch].flush()
+            guard !tail.isEmpty else { continue }
+            let startSample = emitted[ch]
+            emitted[ch] += tail.count
+            try handler(ch, startSample, tail)
         }
     }
 
@@ -147,10 +165,15 @@ public enum DiarizationAudio {
     }
 }
 
-/// Post-recording pass: attributes each live transcript line to a speaker
-/// (model segments for the system channel, "Me" for mic-dominant lines,
-/// system-channel-wins on overlap) and rewrites the file atomically via
-/// temp-file + rename so readers always see a complete transcript.
+/// Post-recording pass: attributes each live transcript line to a speaker and
+/// rewrites the file atomically via temp-file + rename so readers always see a
+/// complete transcript.
+///
+/// Attribution prefers the session ledger — the transcriber knows which channel
+/// each line was cut from, and the echo gate knows how much of a microphone line
+/// was really the local voice. Channel energy is only a fallback for sessions
+/// recorded before the ledger existed: with a microphone that hears the laptop's
+/// speakers, "the mic channel is active" says almost nothing about who spoke.
 public enum TranscriptRelabeler {
     public enum RelabelError: Error, LocalizedError {
         case unreadable
@@ -159,6 +182,11 @@ public enum TranscriptRelabeler {
 
     /// RMS above which a channel counts as carrying audio energy.
     public static let activeThreshold: Float = 0.004
+    /// Microphone lines at or above this local-speech share are the user.
+    public static let meShareThreshold = 0.5
+    /// Share of a microphone line's words that overlapping system audio must
+    /// reproduce before the line is treated as an echo copy of it.
+    public static let echoDuplicateSimilarity = 0.6
 
     public struct TranscriptLine: Sendable {
         public let raw: String
@@ -192,46 +220,152 @@ public enum TranscriptRelabeler {
         }
     }
 
-    /// Pure attribution logic (unit-testable): returns one label per line, or
-    /// nil meaning "leave the line exactly as it is".
+    /// Outcome of attribution: a label per line, or nil meaning "leave the line
+    /// exactly as it is", plus the indices of lines to drop outright.
+    public struct Attribution: Sendable {
+        public let labels: [String?]
+        public let dropped: Set<Int>
+    }
+
+    /// Pure attribution logic (unit-testable) using the session ledger.
+    public static func attributeLines(
+        lines: [TranscriptLine],
+        segments: [DiarizedSegment],
+        ledger: [TranscriptLedger.Entry],
+        energy: ChannelEnergyProfile?,
+        totalSeconds: Double
+    ) -> Attribution {
+        var labels: [String?] = Array(repeating: nil, count: lines.count)
+        var dropped = Set<Int>()
+        var previousLabel: String?
+
+        // Line index → ledger entry. The transcriber appends transcript lines and
+        // ledger entries one after the other on a single lane, so the k-th
+        // transcribed line is the k-th entry; markers never have entries.
+        var textLines: [Int] = []
+        for (index, line) in lines.enumerated() where line.startSeconds >= 0 && !line.isMarker {
+            textLines.append(index)
+        }
+        var entryByLineIndex: [Int: TranscriptLedger.Entry] = [:]
+        if ledger.count == textLines.count {
+            for (position, lineIndex) in textLines.enumerated() {
+                entryByLineIndex[lineIndex] = ledger[position]
+            }
+        } else if !ledger.isEmpty {
+            // Counts differ (a chunk failed to transcribe, or a crash truncated the
+            // file): match by text, consuming ledger entries in order so each is
+            // used at most once.
+            var cursor = 0
+            for lineIndex in textLines {
+                let body = lines[lineIndex].body
+                var probe = cursor
+                while probe < ledger.count {
+                    if ledger[probe].text == body {
+                        entryByLineIndex[lineIndex] = ledger[probe]
+                        cursor = probe + 1
+                        break
+                    }
+                    probe += 1
+                }
+            }
+        }
+
+        var previousSystemLabel: String?
+        for (index, line) in lines.enumerated() {
+            guard line.startSeconds >= 0, !line.isMarker else { continue }
+            let windowEnd = index + 1 < lines.count && lines[index + 1].startSeconds >= 0
+                ? lines[index + 1].startSeconds
+                : max(totalSeconds, line.startSeconds + 1)
+
+            guard let entry = entryByLineIndex[index] else {
+                // No provenance for this line: fall back to channel energy.
+                labels[index] = energyLabel(for: line, windowEnd: windowEnd, segments: segments, energy: energy, previous: previousLabel)
+                if let label = labels[index] { previousLabel = label }
+                continue
+            }
+
+            // The ledger knows the span the audio actually covered, which is what
+            // the speaker lookup needs. "Until the next line" cannot be used here:
+            // two channels routinely produce lines that start in the same second,
+            // which makes that window empty, and using the following line's start
+            // when it is later would borrow another speaker's audio.
+            let spanStart = min(line.startSeconds, entry.startSeconds)
+            let spanEnd = max(entry.endSeconds, spanStart + 1)
+            let spanSpeaker = overlappingSpeaker(in: spanStart..<spanEnd, segments: segments)
+
+            switch entry.channel {
+            case .system:
+                // Inherit the last system-channel label so a remote utterance the
+                // segmentation missed does not fall back to an unlabeled line —
+                // but never inherit `Me`, which would put the local user's name on
+                // someone else's words.
+                let label = spanSpeaker ?? previousSystemLabel
+                labels[index] = label
+                if let spanSpeaker { previousSystemLabel = spanSpeaker }
+                if let label { previousLabel = label }
+            case .mic:
+                let share = entry.localShare
+                let systemActive = (energy?.systemRMS(from: spanStart, to: spanEnd) ?? 0) > activeThreshold
+                if echoesNeighbour(entry: entry, line: line, entries: entryByLineIndex, lines: lines) {
+                    // A microphone line whose words are reproduced by system audio
+                    // over the same span is the echo path, whatever the envelope
+                    // gate measured — the same sentence was not said twice at the
+                    // same moment by two people.
+                    dropped.insert(index)
+                } else if let share, share < meShareThreshold, systemActive, let spanSpeaker {
+                    // Microphone audio the echo gate says is mostly the remote
+                    // voice, with no system-channel copy: keep the words, but
+                    // attribute them to the voice they came from.
+                    labels[index] = spanSpeaker
+                    previousSystemLabel = spanSpeaker
+                    previousLabel = spanSpeaker
+                } else {
+                    labels[index] = "Me"
+                    previousLabel = "Me"
+                }
+            }
+        }
+        return Attribution(labels: labels, dropped: dropped)
+    }
+
+    /// Energy-only attribution, for sessions without a ledger.
     public static func attributeLabels(
         lines: [TranscriptLine],
         segments: [DiarizedSegment],
         energy: ChannelEnergyProfile?,
         totalSeconds: Double
     ) -> [String?] {
-        var labels: [String?] = []
-        var previousLabel: String?
-        for (index, line) in lines.enumerated() {
-            guard line.startSeconds >= 0, !line.isMarker else {
-                labels.append(nil)
-                continue
-            }
-            let windowEnd = index + 1 < lines.count && lines[index + 1].startSeconds >= 0
-                ? lines[index + 1].startSeconds
-                : max(totalSeconds, line.startSeconds + 1)
+        attributeLines(
+            lines: lines,
+            segments: segments,
+            ledger: [],
+            energy: energy,
+            totalSeconds: totalSeconds
+        ).labels
+    }
 
-            let micE = energy?.micRMS(from: line.startSeconds, to: windowEnd) ?? 0
-            let sysE = energy?.systemRMS(from: line.startSeconds, to: windowEnd) ?? 0
-            let micActive = micE > activeThreshold
-            let sysActive = sysE > activeThreshold
+    private static func energyLabel(
+        for line: TranscriptLine,
+        windowEnd: Double,
+        segments: [DiarizedSegment],
+        energy: ChannelEnergyProfile?,
+        previous: String?
+    ) -> String? {
+        let micE = energy?.micRMS(from: line.startSeconds, to: windowEnd) ?? 0
+        let sysE = energy?.systemRMS(from: line.startSeconds, to: windowEnd) ?? 0
+        let micActive = micE > activeThreshold
+        let sysActive = sysE > activeThreshold
+        let speaker = overlappingSpeaker(in: line.startSeconds..<windowEnd, segments: segments)
 
-            let speaker = overlappingSpeaker(in: line.startSeconds..<windowEnd, segments: segments)
-
-            let label: String?
-            if micActive && !sysActive {
-                label = "Me"
-            } else if let speaker {
-                label = speaker // system channel wins when both are active
-            } else if sysActive {
-                label = previousLabel
-            } else {
-                label = previousLabel ?? (micActive ? "Me" : nil)
-            }
-            if let label { previousLabel = label }
-            labels.append(label)
+        if micActive && !sysActive {
+            return "Me"
+        } else if let speaker {
+            return speaker
+        } else if sysActive {
+            return previous
+        } else {
+            return previous ?? (micActive ? "Me" : nil)
         }
-        return labels
     }
 
     private static func overlappingSpeaker(in range: Range<Double>, segments: [DiarizedSegment]) -> String? {
@@ -245,13 +379,90 @@ public enum TranscriptRelabeler {
         return best?.speaker
     }
 
+    /// True when a microphone line is the same utterance as a nearby line from
+    /// the system channel — the echo path duplicating a remote speaker.
+    /// True when a microphone line is explained by system-channel audio over the
+    /// same span — the echo path duplicating a remote speaker.
+    ///
+    /// Measured as the share of the *microphone* line's words that the
+    /// overlapping system text reproduces. Direction matters: a long microphone
+    /// segment can echo several short system lines, and comparing one sentence at
+    /// a time with a symmetric score would either miss that case or drop a local
+    /// utterance that merely quotes a short remote phrase back at them.
+    private static func echoesNeighbour(
+        entry: TranscriptLedger.Entry,
+        line: TranscriptLine,
+        entries: [Int: TranscriptLedger.Entry],
+        lines: [TranscriptLine]
+    ) -> Bool {
+        let micTokens = tokens(line.body)
+        guard micTokens.count >= 3 else { return false }
+        let lo = entry.startSeconds - 2
+        let hi = max(entry.endSeconds, entry.startSeconds + 1) + 2
+
+        var overlapping: [String] = []
+        for (index, otherEntry) in entries where otherEntry.channel == .system {
+            guard otherEntry.startSeconds < hi, otherEntry.endSeconds > lo else { continue }
+            guard index < lines.count else { continue }
+            overlapping.append(otherEntry.text)
+        }
+        guard !overlapping.isEmpty else { return false }
+
+        let systemTokens = tokens(overlapping.joined(separator: " "))
+        guard systemTokens.count >= 3 else { return false }
+        let coverage = longestCommonSubsequence(micTokens, systemTokens) / Double(micTokens.count)
+        return coverage >= echoDuplicateSimilarity
+    }
+
+    /// Removes a leading `Me:` / `Speaker N:` label so duplicate detection can
+    /// compare the words themselves in an already-relabeled transcript.
+    static func stripSpeaker(_ body: String) -> String {
+        guard let colon = body.firstIndex(of: ":") else { return body }
+        let label = body[body.startIndex..<colon].trimmingCharacters(in: .whitespaces)
+        guard label == "Me" || label.hasPrefix("Speaker ") else { return body }
+        return String(body[body.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+    }
+
+    static func tokens(_ text: String) -> [String] {
+        text.lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+            .filter { !$0.isEmpty }
+    }
+
+    /// Length of the longest common subsequence of two token lists.
+    static func longestCommonSubsequence(_ a: [String], _ b: [String]) -> Double {
+        guard !a.isEmpty, !b.isEmpty else { return 0 }
+        var previous = [Int](repeating: 0, count: b.count + 1)
+        var current = [Int](repeating: 0, count: b.count + 1)
+        for i in 1...a.count {
+            for j in 1...b.count {
+                if a[i - 1] == b[j - 1] {
+                    current[j] = previous[j - 1] + 1
+                } else {
+                    current[j] = max(previous[j], current[j - 1])
+                }
+            }
+            swap(&previous, &current)
+            current = Array(repeating: 0, count: b.count + 1)
+        }
+        return Double(previous[b.count])
+    }
+
+    /// Longest common subsequence scaled by the shorter side.
+    static func longestCommonSubsequenceRatio(_ a: [String], _ b: [String]) -> Double {
+        guard !a.isEmpty, !b.isEmpty else { return 0 }
+        return longestCommonSubsequence(a, b) / Double(min(a.count, b.count))
+    }
+
     /// Rewrites `transcriptURL` with speaker labels. Throws on failure, in
     /// which case the live transcript file is left untouched.
     @discardableResult
     public static func relabel(
         transcriptURL: URL,
         audioURL: URL,
-        segments: [DiarizedSegment]
+        segments: [DiarizedSegment],
+        ledger: TranscriptLedger? = nil
     ) throws -> URL {
         guard let contents = try? String(contentsOf: transcriptURL, encoding: .utf8) else {
             throw RelabelError.unreadable
@@ -266,11 +477,18 @@ public enum TranscriptRelabeler {
             ?? lines.compactMap { $0.startSeconds >= 0 ? $0.startSeconds : nil }.max().map { $0 + 1 }
             ?? 0
 
-        let labels = attributeLabels(lines: lines, segments: segments, energy: energy, totalSeconds: totalSeconds)
+        let attribution = attributeLines(
+            lines: lines,
+            segments: segments,
+            ledger: ledger?.all ?? [],
+            energy: energy,
+            totalSeconds: totalSeconds
+        )
 
         var out = ""
-        for (line, label) in zip(lines, labels) {
-            if let label {
+        for (index, line) in lines.enumerated() {
+            if attribution.dropped.contains(index) { continue }
+            if let label = attribution.labels[index] {
                 out += "[\(line.timestampText)] \(label): \(line.body)\n"
             } else {
                 out += "\(line.raw)\n"

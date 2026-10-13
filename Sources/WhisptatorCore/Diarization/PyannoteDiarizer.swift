@@ -5,14 +5,21 @@ import Foundation
 /// `onnx-community` exports of the two weights the 3.1 config references:
 ///
 ///   16 kHz mono audio -> segmentation-3.0 sliding windows over raw samples
-///   (powerset logits [1, frames, 7], 270-sample hop)
-///   -> speech activity per 10 ms bin -> turn regions -> wespeaker-voxceleb-
-///   resnet34-LM embeddings (80-bin kaldi fbank -> [1, 256]) per region piece
-///   -> average-linkage agglomerative clustering
-///   -> speakers numbered by first appearance.
+///   (powerset logits [1, frames, 7], offset 990 / hop 270 samples)
+///   -> speech activity and overlap per 10 ms bin -> turn regions
+///   -> wespeaker-voxceleb-resnet34-LM embeddings (80-bin kaldi fbank ->
+///   [1, 256]) per eligible window, pooled per turn
+///   -> weighted average-linkage agglomerative clustering with a speaker cap
+///   and support-based absorption
+///   -> windows refined against cluster centroids -> speakers numbered by first
+///   appearance.
 ///
-/// Thresholds remain tunable because quality depends on real meeting audio;
-/// calibration against recorded calls is task 8.1.
+/// Clustering happens at turn level on purpose. Labeling every 3 s embedding
+/// window on its own made one continuous voice look like dozens of speakers:
+/// window embeddings of the same person on a compressed, quiet meeting channel
+/// sit ~0.24 apart, so a 0.25 merge threshold joined almost nothing and every
+/// window became a new person. Pooled turn embeddings are far more stable, and
+/// the cap plus absorption keep a single odd window from inventing a speaker.
 public actor PyannoteDiarizer: SpeakerDiarizer {
     public struct Parameters: Sendable {
         /// Raw-audio window fed to the segmentation model.
@@ -33,10 +40,28 @@ public actor PyannoteDiarizer: SpeakerDiarizer {
         public var embeddingWindowSeconds: Double = 3.0
         /// Embedding window hop within a turn.
         public var embeddingHopSeconds: Double = 1.5
-        /// Cosine distance above which two pieces are different speakers.
-        /// Measured with real weights: same voice ≈ 0.03–0.05, distinct
-        /// voices ≈ 0.34–0.37 (synthetic); real meetings need 8.1 tuning.
-        public var clusterDistanceThreshold: Double = 0.25
+        /// Shortest piece that may be embedded; anything shorter is not padded
+        /// with silence, which used to produce unstable embeddings.
+        public var minEmbeddingSeconds: Double = 1.2
+        /// At least this fraction of a piece's activity bins must be speech.
+        public var minSpeechRatio: Double = 0.55
+        /// Pieces per turn, sampled evenly when the turn is long.
+        public var maxPiecesPerTurn: Int = 6
+        /// Cosine distance below which two turns may merge into one speaker.
+        /// Calibrated against real meetings: the same voice in consecutive
+        /// 3 s windows measures ~0.24 median (~0.33 at p90), while distinct
+        /// voices measure ~0.47; pyannote's own 3.1 pipeline cuts average
+        /// linkage at 0.78 and this library's reference default is 0.715.
+        public var clusterDistanceThreshold: Double = 0.6
+        /// Hard ceiling on speakers in one session; beyond it the closest
+        /// clusters merge no matter the distance.
+        public var maxSpeakers: Int = 8
+        /// A cluster supported by less speech than this is absorbed into its
+        /// nearest neighbour instead of becoming a speaker.
+        public var minClusterSeconds: Double = 2.0
+        /// How much closer another cluster's centroid must be than a window's
+        /// own cluster before the window is reassigned to it.
+        public var reassignmentMargin: Double = 0.06
 
         public init() {}
     }
@@ -100,69 +125,152 @@ public actor PyannoteDiarizer: SpeakerDiarizer {
         let audio = try await SystemChannelLoader.load16kHzMono(from: mp3URL)
         guard audio.count > 1600 else { throw DiarizerError.emptyAudio }
 
-        let activity = speechActivity(audio: audio, model: models.segmentation)
+        let frame = speechFrames(audio: audio, model: models.segmentation)
+        let activity = frame.activity
         let turns = turnRegions(from: activity)
         guard !turns.isEmpty else { return [] }
 
-        let pieces = embeddingPieces(for: turns, audio: audio, model: models.embedding)
+        let pieces = embeddingPieces(
+            for: turns,
+            audio: audio,
+            frames: frame,
+            embedder: WeSpeakerEmbedder(model: models.embedding)
+        )
         guard !pieces.isEmpty else { return [] }
 
-        let labels = AgglomerativeClustering.cluster(
-            vectors: pieces.map(\.embedding),
-            distanceThreshold: parameters.clusterDistanceThreshold
+        // Pool per turn, then cluster turns.
+        let pooled = poolByTurn(pieces, turns: turns)
+        let result = AgglomerativeClustering.cluster(
+            vectors: pooled.map(\.embedding),
+            distanceThreshold: parameters.clusterDistanceThreshold,
+            weights: pooled.map(\.seconds),
+            maxClusters: parameters.maxSpeakers,
+            minClusterWeight: parameters.minClusterSeconds
         )
+        guard result.clusterCount > 0 else { return [] }
 
-        return speakerSegments(turns: turns, pieces: pieces, labels: labels)
+        let turnLabels = result.labels
+        let windowLabels = refine(
+            pieces: pieces,
+            pooled: pooled,
+            turnLabels: turnLabels,
+            centroids: result.centroids
+        )
+        let segments = speakerSegments(pieces: pieces, windowLabels: windowLabels)
+        AppLogger.shared.log(
+            category: .model,
+            message: "Diarization: \(turns.count) turns, \(pieces.count) embedded windows, \(result.clusterCount) speaker(s)"
+        )
+        return segments
     }
 
     // MARK: - Segmentation
 
-    /// Samples per segmentation output frame (`preprocessor_config.json`:
-    /// offset 990, step 270 at 16 kHz).
+    /// Powerset frame geometry (`preprocessor_config.json`): first frame centre
+    /// at sample offset 990, consecutive frames every 270 samples at 16 kHz.
+    private static let segmentationOffset = 990.0
     private static let segmentationStep = 270.0
 
+    struct SpeechFrames {
+        /// Probability of any speech per 10 ms bin, averaged over windows.
+        let activity: [Double]
+        /// Share of that speech probability that came from multi-speaker
+        /// powerset classes, per bin: 0 when one voice, ~1 when several.
+        let overlapShare: [Double]
+    }
+
     /// Returns speech probability per 10 ms bin, averaged over sliding
-    /// segmentation windows. Activity = probability of any speaker class
-    /// (1 - softmax over the NO_SPEAKER powerset class).
-    func speechActivity(audio: [Float], model: OrtModel) -> [Double] {
+    /// segmentation windows, plus the share of that probability attributable to
+    /// simultaneous speakers.
+    func speechFrames(audio: [Float], model: OrtModel) -> SpeechFrames {
         let binSeconds = parameters.frameSeconds
         let binCount = max(1, Int((Double(audio.count) / 16_000 / binSeconds).rounded(.up)))
+
+        var speechSums = [Double](repeating: 0, count: binCount)
+        var pairSums = [Double](repeating: 0, count: binCount)
+        var counts = [Int](repeating: 0, count: binCount)
+
         let windowSamples = max(1, Int(parameters.segmentationWindowSeconds * 16_000))
         let hopSamples = max(1, Int(parameters.segmentationHopSeconds * 16_000))
 
-        var sums = [Double](repeating: 0, count: binCount)
-        var counts = [Int](repeating: 0, count: binCount)
-
         var start = 0
         while true {
-            var window = Array(audio[start..<min(start + windowSamples, audio.count)])
-            if window.count < windowSamples {
+            let covered = audio.count - start
+            if covered >= windowSamples {
+                let window = Array(audio[start..<start + windowSamples])
+                if let probs = runSegmentation(model: model, samples: window, windowSamples: windowSamples) {
+                    accumulate(
+                        probs: probs,
+                        windowStart: start,
+                        binSeconds: binSeconds,
+                        speech: &speechSums,
+                        pair: &pairSums,
+                        counts: &counts
+                    )
+                }
+            } else if start == 0 {
+                // Shorter than one model window (tests, very short clips):
+                // pad, and only credit the bins the audio really covers.
+                var window = audio
                 window.append(contentsOf: [Float](repeating: 0, count: windowSamples - window.count))
-            }
-            if let probs = runSegmentation(model: model, samples: window, windowSamples: windowSamples) {
-                let samplesPerFrame = Double(windowSamples) / Double(probs.frames)
-                for f in 0..<probs.frames {
-                    var background = 0.0
-                    var exponentSum = 0.0
-                    for c in 0..<probs.classesPerFrame {
-                        let e = exp(probs.data[f * probs.classesPerFrame + c])
-                        exponentSum += e
-                        if c == 0 { background = e }
-                    }
-                    let activity = 1 - background / max(exponentSum, 1e-12)
-                    let t = Double(start) + (Double(f) + 0.5) * samplesPerFrame
-                    let bin = Int(t / (16_000 * binSeconds))
-                    guard bin < binCount else { continue }
-                    sums[bin] += activity
-                    counts[bin] += 1
+                if let probs = runSegmentation(model: model, samples: window, windowSamples: windowSamples) {
+                    accumulate(
+                        probs: probs,
+                        windowStart: 0,
+                        binSeconds: binSeconds,
+                        speech: &speechSums,
+                        pair: &pairSums,
+                        counts: &counts
+                    )
                 }
             }
             guard start + windowSamples < audio.count else { break }
             start += hopSamples
         }
 
-        return (0..<binCount).map { i in
-            counts[i] > 0 ? sums[i] / Double(counts[i]) : 0
+        var activity = [Double](repeating: 0, count: binCount)
+        var overlapShare = [Double](repeating: 0, count: binCount)
+        for i in 0..<binCount where counts[i] > 0 {
+            let speech = speechSums[i] / Double(counts[i])
+            let pair = pairSums[i] / Double(counts[i])
+            activity[i] = speech
+            overlapShare[i] = speech > 1e-9 ? min(1, pair / speech) : 0
+        }
+        return SpeechFrames(activity: activity, overlapShare: overlapShare)
+    }
+
+    private func accumulate(
+        probs: SegmentationProbs,
+        windowStart: Int,
+        binSeconds: Double,
+        speech: inout [Double],
+        pair: inout [Double],
+        counts: inout [Int]
+    ) {
+        let classes = probs.classesPerFrame
+        for f in 0..<probs.frames {
+            // Powerset classes for segmentation-3.0 (max 3 speakers): 0 is
+            // non-speech, 1-3 are single speakers, 4-6 are speaker pairs.
+            var exp = [Double](repeating: 0, count: classes)
+            var exponentSum = 0.0
+            for c in 0..<classes {
+                let e = Foundation.exp(probs.data[f * classes + c])
+                exp[c] = e
+                exponentSum += e
+            }
+            guard exponentSum > 1e-12 else { continue }
+            let background = classes > 0 ? exp[0] / exponentSum : 1.0
+            let speechTotal = 1 - background
+            var pairShare = 0.0
+            if classes > 4 {
+                for c in 4..<classes { pairShare += exp[c] / exponentSum }
+            }
+            let sampleTime = Double(windowStart) + Self.segmentationOffset + (Double(f) + 0.5) * Self.segmentationStep
+            let bin = Int(sampleTime / (16_000 * binSeconds))
+            guard bin >= 0, bin < speech.count else { continue }
+            speech[bin] += speechTotal
+            pair[bin] += pairShare
+            counts[bin] += 1
         }
     }
 
@@ -226,16 +334,21 @@ public actor PyannoteDiarizer: SpeakerDiarizer {
         let embedding: [Double]
     }
 
-    private func embeddingPieces(for turns: [(start: Double, end: Double)], audio: [Float], model: OrtModel) -> [Piece] {
+    private func embeddingPieces(
+        for turns: [(start: Double, end: Double)],
+        audio: [Float],
+        frames: SpeechFrames,
+        embedder: WeSpeakerEmbedder
+    ) -> [Piece] {
         let windowSamples = max(1600, Int(parameters.embeddingWindowSeconds * 16_000))
         let stride = max(1, Int(parameters.embeddingHopSeconds * 16_000))
-        let fbank = WeSpeakerFbank()
+        let minSamples = Int(parameters.minEmbeddingSeconds * 16_000)
         var pieces: [Piece] = []
 
         for (turnIndex, turn) in turns.enumerated() {
             let lo = Int(turn.start * 16_000)
             let hi = min(audio.count, Int(turn.end * 16_000))
-            guard hi - lo >= Int(parameters.minTurnSeconds * 16_000) else { continue }
+            guard hi - lo >= minSamples else { continue }
 
             var offsets = [Int]()
             var offset = lo
@@ -243,94 +356,139 @@ public actor PyannoteDiarizer: SpeakerDiarizer {
                 offsets.append(offset)
                 offset += stride
             }
-            if offsets.isEmpty { offsets = [max(lo, hi - windowSamples)] }
+            // A turn shorter than one window is embedded from its full span
+            // rather than zero-padded out to 3 s.
+            if offsets.isEmpty { offsets = [lo] }
+            if offsets.count > parameters.maxPiecesPerTurn {
+                let step = Double(offsets.count - 1) / Double(max(1, parameters.maxPiecesPerTurn - 1))
+                var picked = [Int]()
+                var seen = Set<Int>()
+                for i in 0..<parameters.maxPiecesPerTurn {
+                    let offset = offsets[Int((Double(i) * step).rounded())]
+                    if seen.insert(offset).inserted { picked.append(offset) }
+                }
+                offsets = picked
+            }
 
-            for offset in offsets {
-                var window = Array(audio[offset..<min(offset + windowSamples, hi)])
-                if window.count < windowSamples {
-                    window.append(contentsOf: [Float](repeating: 0, count: windowSamples - window.count))
+            for pieceOffset in offsets {
+                let end = min(pieceOffset + windowSamples, hi)
+                guard end - pieceOffset >= minSamples else { continue }
+                guard cleanSpeechRatio(in: pieceOffset..<end, frames: frames) >= parameters.minSpeechRatio else {
+                    continue
                 }
-                let features = fbank.extract(from: window)
-                guard !features.isEmpty, let melCount = features.first?.count else { continue }
-                var flat = [Float](repeating: 0, count: features.count * melCount)
-                for (f, frame) in features.enumerated() {
-                    for m in 0..<melCount {
-                        flat[f * melCount + m] = Float(frame[m])
-                    }
-                }
-                do {
-                    // Input layout: (1, num_frames, 80) log-mel fbank.
-                    let (data, dims) = try model.run(input: flat, shape: [1, features.count, melCount])
-                    let embedding = normalize(averageEmbedding(data: data, dims: dims))
-                    if !embedding.isEmpty {
-                        pieces.append(Piece(
-                            turnIndex: turnIndex,
-                            start: Double(offset) / 16_000,
-                            end: Double(min(offset + windowSamples, hi)) / 16_000,
-                            embedding: embedding
-                        ))
-                    }
-                } catch {
-                    AppLogger.shared.log(category: .model, message: "Embedding inference failed: \(error.localizedDescription)")
-                }
+                let window = Array(audio[pieceOffset..<end])
+                guard let embedding = embedder.embed(window), !embedding.isEmpty else { continue }
+                pieces.append(Piece(
+                    turnIndex: turnIndex,
+                    start: Double(pieceOffset) / 16_000,
+                    end: Double(end) / 16_000,
+                    embedding: embedding
+                ))
             }
         }
         return pieces
     }
 
-    /// L2-normalize so cosine distance is a plain dot product in the clusterer.
-    private func normalize(_ vector: [Double]) -> [Double] {
-        let norm = sqrt(vector.reduce(0) { $0 + $1 * $1 })
-        guard norm > 0 else { return vector }
-        return vector.map { $0 / norm }
-    }
-
-    /// Output may be (1, D) or (1, T, D); average over time if 3-D.
-    private func averageEmbedding(data: [Float], dims: [Int]) -> [Double] {
-        guard let last = dims.last, last > 0 else { return [] }
-        let frames = dims.count >= 3 ? max(1, data.count / last) : 1
-        var sums = [Double](repeating: 0, count: last)
-        for f in 0..<frames {
-            for d in 0..<last {
-                let index = f * last + d
-                if index < data.count { sums[d] += Double(data[index]) }
+    /// Share of a sample range whose 10 ms bins were single-speaker speech.
+    /// Overlapping speech is a poor embedding input: the vector describes two
+    /// voices at once and matches nobody, which is how phantom speakers appear.
+    private func cleanSpeechRatio(in range: Range<Int>, frames: SpeechFrames) -> Double {
+        guard !frames.activity.isEmpty else { return 1 }
+        let binSeconds = parameters.frameSeconds
+        let lo = Int(Double(range.lowerBound) / 16_000 / binSeconds)
+        let hi = Int((Double(range.upperBound) / 16_000 / binSeconds).rounded(.up))
+        var good = 0
+        var total = 0
+        for bin in lo..<min(hi, frames.activity.count) {
+            total += 1
+            if frames.activity[bin] >= parameters.activityThreshold, frames.overlapShare[bin] < 0.5 {
+                good += 1
             }
         }
-        return sums.map { $0 / Double(frames) }
+        guard total > 0 else { return 0 }
+        return Double(good) / Double(total)
+    }
+
+    /// Mean of the window embeddings inside a turn, L2-normalized.
+    struct PooledTurn {
+        let turnIndex: Int
+        let embedding: [Double]
+        let seconds: Double
+    }
+
+    private func poolByTurn(_ pieces: [Piece], turns: [(start: Double, end: Double)]) -> [PooledTurn] {
+        var grouped: [Int: [Piece]] = [:]
+        for piece in pieces { grouped[piece.turnIndex, default: []].append(piece) }
+        return grouped.keys.sorted().map { turnIndex in
+            let group = grouped[turnIndex] ?? []
+            let mean = EmbeddingMath.weightedMean(group.map(\.embedding), weights: group.map { $0.end - $0.start })
+            // Weight by the turn's real speech span, not by overlapping window
+            // lengths, so `minClusterSeconds` means seconds of audio.
+            let seconds = turnIndex < turns.count ? turns[turnIndex].end - turns[turnIndex].start : 0.2
+            return PooledTurn(turnIndex: turnIndex, embedding: EmbeddingMath.l2Normalize(mean), seconds: max(0.2, seconds))
+        }
+    }
+
+    /// Give each window its own label so a turn that really contains a speaker
+    /// change is split, while windows that merely embed oddly keep the turn's
+    /// label instead of becoming a new speaker.
+    private func refine(pieces: [Piece], pooled: [PooledTurn], turnLabels: [Int], centroids: [[Double]]) -> [Int] {
+        guard !centroids.isEmpty else { return Array(repeating: 0, count: pieces.count) }
+        var labelByTurn: [Int: Int] = [:]
+        for (position, turn) in pooled.enumerated() where position < turnLabels.count {
+            labelByTurn[turn.turnIndex] = turnLabels[position]
+        }
+
+        var labels: [Int] = []
+        labels.reserveCapacity(pieces.count)
+        for piece in pieces {
+            let own = labelByTurn[piece.turnIndex] ?? 0
+            let ownDistance = distance(piece.embedding, to: centroids, index: own)
+
+            var bestOther = own
+            var bestOtherDistance = ownDistance
+            for cluster in centroids.indices where cluster != own {
+                let d = distance(piece.embedding, to: centroids, index: cluster)
+                if d < bestOtherDistance {
+                    bestOtherDistance = d
+                    bestOther = cluster
+                }
+            }
+
+            // Reassign only when another cluster is clearly the better match. A
+            // window that merely embeds oddly keeps the turn's label instead of
+            // becoming an extra speaker.
+            labels.append(bestOtherDistance < ownDistance - parameters.reassignmentMargin ? bestOther : own)
+        }
+        return labels
+    }
+
+    private func distance(_ embedding: [Double], to centroids: [[Double]], index: Int) -> Double {
+        guard centroids.indices.contains(index) else { return .infinity }
+        return EmbeddingMath.cosineDistance(embedding, centroids[index])
     }
 
     // MARK: - Speakers
 
-    func speakerSegments(
-        turns: [(start: Double, end: Double)],
-        pieces: [Piece],
-        labels: [Int]
-    ) -> [DiarizedSegment] {
-        guard pieces.count == labels.count else { return [] }
+    /// Turns windows into time-ordered speaker segments, numbering speakers by
+    /// first appearance.
+    func speakerSegments(pieces: [Piece], windowLabels: [Int]) -> [DiarizedSegment] {
+        guard pieces.count == windowLabels.count else { return [] }
+        let ordered = zip(pieces, windowLabels).sorted { $0.0.start < $1.0.start }
 
         var numberByCluster: [Int: Int] = [:]
         var nextNumber = 1
         var segments: [DiarizedSegment] = []
-
-        // Label per embedding window (not per turn majority) so a turn that
-        // spans a speaker change still yields correct sub-segments; windows
-        // overlap by design (hop < window), consecutive same-label windows
-        // merge into one segment.
-        for turnIndex in turns.indices {
-            let turnPieces = zip(pieces, labels)
-                .filter { $0.0.turnIndex == turnIndex }
-                .sorted { $0.0.start < $1.0.start }
-            for (piece, label) in turnPieces {
-                if numberByCluster[label] == nil {
-                    numberByCluster[label] = nextNumber
-                    nextNumber += 1
-                }
-                let speaker = "Speaker \(numberByCluster[label]!)"
-                if let last = segments.last, last.speaker == speaker, piece.start <= last.end + parameters.turnGapFillSeconds {
-                    segments[segments.count - 1] = DiarizedSegment(start: last.start, end: max(last.end, piece.end), speaker: speaker)
-                } else {
-                    segments.append(DiarizedSegment(start: piece.start, end: piece.end, speaker: speaker))
-                }
+        for (piece, label) in ordered {
+            if numberByCluster[label] == nil {
+                numberByCluster[label] = nextNumber
+                nextNumber += 1
+            }
+            let speaker = "Speaker \(numberByCluster[label]!)"
+            if let last = segments.last, last.speaker == speaker, piece.start <= last.end + parameters.turnGapFillSeconds {
+                segments[segments.count - 1] = DiarizedSegment(start: last.start, end: max(last.end, piece.end), speaker: speaker)
+            } else {
+                segments.append(DiarizedSegment(start: piece.start, end: piece.end, speaker: speaker))
             }
         }
         return segments

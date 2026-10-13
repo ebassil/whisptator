@@ -130,9 +130,10 @@ Meetings are transcribed **live** — text lands in the transcript file while yo
 
 1. Trigger the meeting shortcut (or use the menu bar). A floating **Live Transcript panel** opens automatically (configurable).
 2. The app captures system audio + microphone as two discrete channels (mic = left, system = right; configurable)
-3. Transcript lines (`[HH:MM:SS] text`) are appended to `S.txt` and the `.mp3` grows live in the save folder — a crash loses at most the last flush window (≤ 2 s audio, one chunk of text)
-4. Mute your microphone mid-meeting via the shortcut or the panel button; muted stretches are recorded as silence and marked `(mic muted)` in the transcript
-5. Trigger the shortcut again to stop. Queue drains, files finalize, and (if speaker identification is enabled) a local diarization pass relabels the transcript with `Speaker N:` / `Me:` prefixes
+3. Each channel is segmented and transcribed **separately**, so the recognizer never hears two people at once. The microphone channel is also checked for **acoustic echo** — your laptop's speakers playing the remote voice back into your own mic — and those stretches are suppressed instead of being transcribed a second time as if you had said them. (Use headphones and this is a non-issue; the `.mp3` always keeps the raw microphone as recorded.)
+4. Transcript lines (`[HH:MM:SS] text`) are appended to `S.txt` and the `.mp3` grows live in the save folder — a crash loses at most the last flush window (≤ 2 s audio, one chunk of text)
+5. Mute your microphone mid-meeting via the shortcut or the panel button; muted stretches are recorded as silence and marked `(mic muted)` in the transcript
+6. Trigger the shortcut again to stop. Queue drains, files finalize, and (if speaker identification is enabled) a local diarization pass relabels the transcript with `Speaker N:` / `Me:` prefixes using each line's recorded channel provenance, and drops any line that merely echoed another
 
 Transcripts and audio are saved to `~/Documents/Whisptator/Meetings/` by default (configurable).
 
@@ -237,17 +238,21 @@ Whisptator/
 │       ├── Meeting/
 │       │   ├── SystemAudioCapture.swift   # ScreenCaptureKit audio (48 kHz)
 │       │   ├── StereoAligner.swift        # Pairs mic/system buffers on one frame timeline
-│       │   ├── LiveMeetingPipeline.swift  # Streaming orchestrator (sink + segmenter fan-out)
-│       │   ├── EnergyVADSegmenter.swift   # Speech detection & chunking (400 ms cut, 30 s cap)
-│       │   ├── ChunkQueue.swift           # Bounded pending-chunk queue (drops oldest)
-│       │   ├── ChunkTranscriber.swift     # Single-lane Whisper worker, ordered writes
+│       │   ├── LiveMeetingPipeline.swift  # Streaming orchestrator (sink + per-channel fan-out)
+│       │   ├── AcousticEchoGate.swift     # Speaker-phone echo detection for the mic channel
+│       │   ├── EnergyVADSegmenter.swift   # Per-channel speech detection & chunking (400 ms cut, 30 s cap)
+│       │   ├── ChunkQueue.swift           # Bounded pending-chunk queue, timeline-ordered (drops oldest)
+│       │   ├── ChunkTranscriber.swift     # Single-lane Whisper worker, ordered writes, level-normalised input
+│       │   ├── TranscriptLedger.swift     # Per-line channel provenance for the relabel pass
 │       │   ├── TranscriptWriter.swift     # Durable [HH:MM:SS] line appends (fsync per line)
 │       │   ├── TranscriptRelabeler.swift  # Speaker relabeling with atomic write-back
 │       │   ├── SpeakerDiarizer.swift      # Engine abstraction for diarization
 │       │   ├── MeetingRecorder.swift      # Live session orchestration (states, mute, hotkeys)
 │       │   └── TranscriptSaver.swift      # Legacy saving + old-file cleanup (.mp3/.wav)
 │       ├── Diarization/
-│       │   ├── PyannoteDiarizer.swift     # ONNX segmentation + embeddings + clustering
+│       │   ├── PyannoteDiarizer.swift     # ONNX segmentation + embeddings + turn-level clustering
+│       │   ├── WeSpeakerEmbedder.swift    # 256-dim speaker embeddings for a window of audio
+│       │   ├── StreamResampler.swift      # One converter kept alive across a decoded file
 │       │   ├── OrtModel.swift             # ONNX Runtime session wrapper
 │       │   ├── LogMelExtractor.swift      # 16 kHz log-mel features (FFT + filterbank)
 │       │   ├── WeSpeakerFbank.swift       # Kaldi 80-bin fbank for the embedding model
@@ -353,11 +358,16 @@ log stream --predicate 'process == "Whisptator"'
 - Long pauses in the transcript mean the chunk queue overflowed (Whisper worker lagging, e.g. dictation using the model concurrently). Check the Logs tab for "Chunk queue full" — the `.mp3` stays complete, so the tail can be recovered manually later
 - VAD cuts words in noisy rooms? The segmentation constants (`EnergyVADSegmenter.Parameters`) are tunable and are calibrated per room profile
 
+**Meeting transcript has duplicated or garbled passages**
+- This happens when the microphone hears the call through your own speakers (speakerphone). The app detects that echo path and suppresses it before transcribing the microphone channel, and the final pass drops any line that merely repeats what the system channel already produced — but a laptop mic sitting centimetres from its own speakers is the hardest case, and **headphones are still the single biggest quality improvement you can make**
+- The final transcript labels each line from the channel its audio came from, so the remote voice is never credited to you; check the Logs tab for "Echo gate locked on" to confirm the echo path was learned during the session (if it never locked on, the mic channel was taken at face value)
+- A recognition loop in the output (the same two or three words repeated until the segment ends) is a symptom of audio the model could not parse; those loops are collapsed by `RepetitionCollapser`, but the underlying cause is usually overlap or echo
+
 **Speaker labels were not applied**
 - Speaker identification is opt-in (Settings → Meeting) and downloads the pyannote speaker-diarization-3.1 ONNX weights once
 - Trigger the download from Settings → Model ("Diarization models"); status and any errors are shown there (no token required for the public exports)
 - A failed/missing model never blocks recording; the live transcript is kept unlabeled
-- Labels are written only in the final pass (after stop); lines whose audio is mic-only are labeled `Me`
+- Labels are written only in the final pass (after stop); microphone lines are labeled `Me`, system-channel lines get the diarized `Speaker N`
 
 **Live transcript panel**
 - "Show Live Transcript" in the menu bar opens/focuses the single panel instance; closing it never affects recording
@@ -414,13 +424,35 @@ make build-release CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMI
 
 ### Testing
 
-Unit tests cover the text cleanup pipeline and integration points. Run with:
+Unit tests cover the text cleanup pipeline, the meeting pipeline (per-channel segmentation, echo gate, ledger attribution, chunk ordering and overflow) and the diarization clustering. Run with:
 
 ```bash
 swift test
 ```
 
 Tests require Xcode's XCTest framework. The CLI `swift test` may not work without Xcode installed.
+
+Some harnesses need real models or recorded audio and **skip silently** when the environment variables are absent — they exist so meeting-quality changes can be measured against actual audio instead of asserted:
+
+```bash
+# Ground-truth multi-speaker clip (three distinct voices, mp3 round-tripped)
+# used by the diarization calibration and end-to-end tests
+Scripts/make-diar-calibration.sh /tmp/diarcal
+
+D="/Users/$USER/Library/Application Support/Whisptator/Diarization"
+DIAR_CALIB_WAV=/tmp/diarcal/synth3_mp3.wav DIAR_CALIB_JSON=/tmp/diarcal/synth3.json \
+DIAR_CALIB_MP3=/tmp/diarcal/synth3.mp3 \
+WHISPTATOR_DIAR_SEG="$D/onnx-community--pyannote-segmentation-3.0/onnx/model.onnx" \
+WHISPTATOR_DIAR_EMB="$D/onnx-community--wespeaker-voxceleb-resnet34-LM/onnx/model.onnx" \
+WHISPTATOR_DIAR_AUDIO=/path/to/a/recorded/meeting.mp3 \
+swift test --filter "DiarizationCalibrationTests|PyannoteDiarizerE2ETests|RealMeetingDiarizationTests"
+
+# A/B of transcription quality on a real recording: mono-fold (the old path) vs
+# per-channel + echo gate vs the final relabeled transcript. Writes A/B/C files
+# to WHISPTATOR_AB_OUT and prints duplicate-line and word counts.
+WHISPTATOR_DIAR_AUDIO=/path/to/meeting.mp3 WHISPTATOR_AB_SECONDS=100 \
+swift test --filter MeetingQualityABTests
+```
 
 ## Privacy
 

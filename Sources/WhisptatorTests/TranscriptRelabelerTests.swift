@@ -229,9 +229,6 @@ final class DiarizationEngineTests: XCTestCase {
     }
 
     func testSpeakerSegmentsNumberedByFirstAppearance() async {
-        let turns: [(start: Double, end: Double)] = [
-            (0, 2), (3, 5), (6, 8), (9, 11),
-        ]
         let pieces = [
             PyannoteDiarizer.Piece(turnIndex: 0, start: 0, end: 2, embedding: [1, 0]),
             PyannoteDiarizer.Piece(turnIndex: 1, start: 3, end: 5, embedding: [0, 1]),
@@ -243,11 +240,29 @@ final class DiarizationEngineTests: XCTestCase {
             segmentationModelURL: URL(fileURLWithPath: "/dev/null"),
             embeddingModelURL: URL(fileURLWithPath: "/dev/null")
         )
-        let segments = await diarizer.speakerSegments(turns: turns, pieces: pieces, labels: labels)
+        let segments = await diarizer.speakerSegments(pieces: pieces, windowLabels: labels)
         XCTAssertEqual(segments.count, 4)
-        // first appearance: turn 0 cluster 0 -> Speaker 1, turn 1 cluster 1 -> Speaker 2
+        // first appearance: cluster 0 -> Speaker 1, cluster 1 -> Speaker 2
         XCTAssertEqual(segments.map(\.speaker), ["Speaker 1", "Speaker 2", "Speaker 1", "Speaker 2"])
         XCTAssertEqual(segments[2].start, 6)
+    }
+
+    func testAdjacentWindowsOfOneSpeakerMergeIntoOneSegment() async {
+        // Overlapping embedding windows (hop shorter than the window) must not
+        // become a list of back-to-back one-second segments.
+        let pieces = [
+            PyannoteDiarizer.Piece(turnIndex: 0, start: 0, end: 3, embedding: [1, 0]),
+            PyannoteDiarizer.Piece(turnIndex: 0, start: 1.5, end: 4.5, embedding: [1, 0]),
+            PyannoteDiarizer.Piece(turnIndex: 0, start: 3.0, end: 6.0, embedding: [1, 0]),
+        ]
+        let diarizer = PyannoteDiarizer(
+            segmentationModelURL: URL(fileURLWithPath: "/dev/null"),
+            embeddingModelURL: URL(fileURLWithPath: "/dev/null")
+        )
+        let segments = await diarizer.speakerSegments(pieces: pieces, windowLabels: [0, 0, 0])
+        XCTAssertEqual(segments.count, 1)
+        XCTAssertEqual(segments[0].start, 0)
+        XCTAssertEqual(segments[0].end, 6)
     }
 }
 
@@ -304,84 +319,91 @@ final class WeSpeakerFbankTests: XCTestCase {
     }
 }
 
-/// End-to-end diarization against the real ONNX weights. Skipped unless
-/// WHISPTATOR_DIAR_SEG / WHISPTATOR_DIAR_EMB point at the segmentation and
-/// embedding `model.onnx` files (Settings → Model downloads them automatically).
+/// End-to-end diarization against the real ONNX weights.
+///
+/// Audio comes from `Scripts/make-diar-calibration.sh`: three distinct human
+/// voices (macOS speech synthesiser voices) in known turns, mp3 round-tripped so
+/// it resembles a real meeting channel. Earlier versions of this test used
+/// hand-built harmonic mixes, which the embedding model does not treat as
+/// different speakers at all — different f0 on the same synthetic spectrum
+/// measures ~0.35 apart, inside the spread of one real voice on a compressed
+/// meeting channel — so a threshold that works on real audio "failed" those
+/// fixtures for the wrong reason. Real voices, real boundaries.
+///
+///     DIAR_CALIB_MP3=synth3.mp3 DIAR_CALIB_JSON=synth3.json \
+///       swift test --filter PyannoteDiarizerE2ETests
+///
 final class PyannoteDiarizerE2ETests: XCTestCase {
-    private func voiceMix(sampleRate: Double, seconds: Double, f0: Double, syllableRate: Double, seed: UInt64) -> [Float] {
-        var rng = SeededGenerator(seed: seed)
-        var phase = 0.0
-        var out = [Float](repeating: 0, count: Int(sampleRate * seconds))
-        for i in 0..<out.count {
-            let t = Double(i) / sampleRate
-            let vib = f0 * (1.0 + 0.015 * sin(2 * Double.pi * 4.7 * t))
-            phase += 2 * Double.pi * vib / sampleRate
-            var s = 0.0
-            for k in 1...10 { s += sin(Double(k) * phase) / pow(Double(k), 1.5) }
-            let env = max(0.0, 0.35 + 0.28 * sin(2 * Double.pi * syllableRate * t))
-            let noise = Double.random(in: -1...1, using: &rng)
-            out[i] = Float(s * 0.16 * env + noise * 0.006 * env + noise * 0.002)
-        }
-        return out
+    private struct Turn { let start: Double; let end: Double; let speaker: Int }
+
+    private func urlIfPresent(_ env: String) -> URL? {
+        guard let path = ProcessInfo.processInfo.environment[env],
+              FileManager.default.fileExists(atPath: path) else { return nil }
+        return URL(fileURLWithPath: path)
     }
 
-    func testTwoVoicesGetDistinctSpeakerLabels() async throws {
-        guard let segPath = ProcessInfo.processInfo.environment["WHISPTATOR_DIAR_SEG"],
-              let embPath = ProcessInfo.processInfo.environment["WHISPTATOR_DIAR_EMB"],
-              FileManager.default.fileExists(atPath: segPath),
-              FileManager.default.fileExists(atPath: embPath) else {
-            throw XCTSkip("set WHISPTATOR_DIAR_SEG / WHISPTATOR_DIAR_EMB to run with real models")
+    func testDiarizesACalibrationClipIntoTheRightSpeakers() async throws {
+        guard let audio = urlIfPresent("DIAR_CALIB_MP3"), let truth = urlIfPresent("DIAR_CALIB_JSON"),
+              let seg = urlIfPresent("WHISPTATOR_DIAR_SEG"), let emb = urlIfPresent("WHISPTATOR_DIAR_EMB") else {
+            throw XCTSkip("set DIAR_CALIB_MP3 / DIAR_CALIB_JSON / WHISPTATOR_DIAR_SEG / WHISPTATOR_DIAR_EMB")
         }
-
-        let rate = 48_000.0
-        let totalSeconds = 24.0
-        let total = Int(rate * totalSeconds)
-        let voiceA = voiceMix(sampleRate: rate, seconds: 8.0, f0: 120, syllableRate: 3.0, seed: 11)
-        let voiceB = voiceMix(sampleRate: rate, seconds: 8.0, f0: 260, syllableRate: 4.2, seed: 97)
-        var right = [Float](repeating: 0, count: total)
-        for (i, v) in voiceA.enumerated() { right[Int(2.0 * rate) + i] = v * 0.8 }
-        for (i, v) in voiceB.enumerated() { right[Int(11.0 * rate) + i] = v * 0.8 }
-
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("diar-e2e-\(UUID().uuidString).mp3")
-        defer { try? FileManager.default.removeItem(at: url) }
-        let sink = try LameStreamSink(url: url, sampleRate: 48_000, channels: 2, bitrate: 64, quality: 2, flushInterval: 2.0)
-        let chunkFrames = 4_800
-        var frame = 0
-        while frame < total {
-            let frames = min(chunkFrames, total - frame)
-            var samples = [Float](repeating: 0, count: frames * 2)
-            for i in 0..<frames {
-                samples[i * 2 + 1] = right[frame + i]
+        let turns: [Turn] = try {
+            let data = try Data(contentsOf: truth)
+            guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                throw NSError(domain: "e2e", code: 1)
             }
-            sink.append(AlignedAudioChunk(startFrame: Int64(frame), frames: frames, channels: 2, samples: samples))
-            frame += frames
-        }
-        await sink.finish()
+            return array.compactMap { entry in
+                guard let start = entry["start"] as? Double, let end = entry["end"] as? Double,
+                      let speaker = entry["speaker"] as? Int else { return nil }
+                return Turn(start: start, end: end, speaker: speaker)
+            }
+        }()
 
-        let diarizer = PyannoteDiarizer(segmentationModelURL: URL(fileURLWithPath: segPath), embeddingModelURL: URL(fileURLWithPath: embPath))
-        let segments = try await diarizer.diarize(mp3URL: url)
-
-        XCTAssertFalse(segments.isEmpty, "expected detected speech")
+        let diarizer = PyannoteDiarizer(segmentationModelURL: seg, embeddingModelURL: emb)
+        let segments = try await diarizer.diarize(mp3URL: audio)
         let speakers = Set(segments.map(\.speaker))
-        XCTAssertGreaterThanOrEqual(speakers.count, 2, "two distinct voices should cluster apart; got \(segments)")
-        let overlapFirst = segments.first { $0.start < 4 && $0.end > 4 }
-        let overlapSecond = segments.first { $0.start < 13 && $0.end > 13 }
-        XCTAssertNotNil(overlapFirst)
-        XCTAssertNotNil(overlapSecond)
-        if let a = overlapFirst, let b = overlapSecond {
-            XCTAssertNotEqual(a.speaker, b.speaker)
-        }
+        let actualSpeakers = Set(turns.map(\.speaker)).count
         for segment in segments {
-            XCTAssertLessThan(segment.start, segment.end)
+            print(String(format: "E2E %.2f-%.2f %@", segment.start, segment.end, segment.speaker))
         }
-    }
-}
 
-struct SeededGenerator: RandomNumberGenerator {
-    private var state: UInt64
-    init(seed: UInt64) { state = seed &* 0x9E3779B97F4A7C15 | 1 }
-    mutating func next() -> UInt64 {
-        state = state &* 6364136223846793005 &+ 1442695040888963407
-        return state
+        XCTAssertEqual(speakers.count, actualSpeakers, "three voices must yield exactly three speakers, got \(segments)")
+
+        // Frame-level accuracy after mapping each true speaker to the label it
+        // wins most often: catches a pipeline that gets the count right but
+        // attributes the wrong stretches.
+        let bin = 0.1
+        var counts: [Int: [String: Int]] = [:]
+        var totalCovered = 0
+        for turn in turns {
+            var frame = Int(turn.start / bin)
+            let last = Int(turn.end / bin)
+            while frame < last {
+                let at = Double(frame) * bin
+                if let label = segments.first(where: { $0.start <= at && $0.end > at })?.speaker {
+                    counts[turn.speaker, default: [:]][label, default: 0] += 1
+                }
+                totalCovered += 1
+                frame += 1
+            }
+        }
+        var bestMapping: [Int: String] = [:]
+        for (speaker, byLabel) in counts {
+            bestMapping[speaker] = byLabel.max { $0.value < $1.value }?.key
+        }
+        var correct = 0
+        for turn in turns {
+            let mapped = bestMapping[turn.speaker]
+            var frame = Int(turn.start / bin)
+            let last = Int(turn.end / bin)
+            while frame < last {
+                let at = Double(frame) * bin
+                if segments.first(where: { $0.start <= at && $0.end > at })?.speaker == mapped { correct += 1 }
+                frame += 1
+            }
+        }
+        let accuracy = totalCovered > 0 ? Double(correct) / Double(totalCovered) : 0
+        print(String(format: "E2E frame accuracy %.2f over %d bins", accuracy, totalCovered))
+        XCTAssertGreaterThan(accuracy, 0.55, "labels must follow the true speakers, got \(segments)")
     }
 }

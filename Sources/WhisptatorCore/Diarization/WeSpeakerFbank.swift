@@ -8,6 +8,12 @@ import Foundation
 /// filters constructed in mel space (20 Hz – 8000 Hz, 80 bins), floor
 /// 1.1920928955078125e-7 (2^-23), natural log, then per-bin cepstral mean
 /// subtraction (`fbank_centering_span: null`).
+///
+/// Calibration note: filter-area normalization (`norm_filters`) and pre-emphasis
+/// continued across frame boundaries were both tried against ground-truth
+/// multi-speaker audio and moved same/different-speaker distances by under 0.01.
+/// The per-bin mean subtraction below cancels any constant per-bin offset, so
+/// those reference variants are deliberately not reproduced.
 struct WeSpeakerFbank: Sendable {
     let sampleRate: Int
     let frameLength: Int

@@ -1,6 +1,8 @@
 import Foundation
 
-/// Bounded, FIFO-ordered queue of pending transcription chunks.
+/// Bounded queue of pending transcription chunks, ordered by position on the
+/// recording timeline so the transcript reads chronologically even though two
+/// segmenters (microphone and system) feed it in parallel.
 /// Overflow drops the oldest untranscribed chunk (audio is never dropped).
 public final class ChunkQueue: @unchecked Sendable {
     public let capacity: Int
@@ -20,7 +22,8 @@ public final class ChunkQueue: @unchecked Sendable {
         return segments.count
     }
 
-    /// Enqueue a segment in order. Returns the dropped segment when the queue was full.
+    /// Enqueue a segment in timeline order. Returns the dropped segment when the
+    /// queue was full.
     @discardableResult
     public func enqueue(_ segment: SpeechSegment) -> SpeechSegment? {
         lock.lock()
@@ -28,15 +31,22 @@ public final class ChunkQueue: @unchecked Sendable {
             lock.unlock()
             return segment
         }
+        // Insert after the last segment that starts no later than this one, so
+        // equal starts keep arrival order (microphone before system by init).
+        var index = segments.count
+        while index > 0, segments[index - 1].startFrame > segment.startFrame {
+            index -= 1
+        }
+        segments.insert(segment, at: index)
+
         var dropped: SpeechSegment?
-        if segments.count >= capacity {
+        if segments.count > capacity {
             dropped = segments.removeFirst()
         }
-        segments.append(segment)
 
         var handed: CheckedContinuation<SpeechSegment?, Never>?
         var handedSegment: SpeechSegment?
-        if let waiter = dequeueWaiters.first {
+        if let waiter = dequeueWaiters.first, !segments.isEmpty {
             dequeueWaiters.removeFirst()
             handedSegment = segments.removeFirst()
             activeWork += 1

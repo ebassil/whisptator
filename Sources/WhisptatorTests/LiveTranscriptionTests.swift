@@ -65,14 +65,15 @@ final class LiveTranscriptionTests: XCTestCase {
 
     // MARK: 3.2 — order preservation and drop policy
 
-    private func segment(startFrame: Int64, seconds: Double = 1) -> SpeechSegment {
+    private func segment(startFrame: Int64, seconds: Double = 1, channel: AudioChannel = .mic) -> SpeechSegment {
         var samples = [Float](repeating: Float(startFrame), count: Int(48_000 * seconds))
         samples[0] = Float(startFrame)
         return SpeechSegment(
             startFrame: startFrame,
             endFrame: startFrame + Int64(seconds * 48_000),
             samples: samples,
-            sampleRate: 48_000
+            sampleRate: 48_000,
+            channel: channel
         )
     }
 

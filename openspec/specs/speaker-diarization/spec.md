@@ -25,22 +25,34 @@ The system SHALL perform speaker diarization entirely on-device using a local py
 - **THEN** no network requests are made and processing completes locally
 
 ### Requirement: Microphone channel identifies the local user
-The system SHALL label transcript lines whose audio is dominated by the microphone channel as spoken by `Me` without invoking the diarization model, and SHALL attribute lines dominated by the system channel using the diarization result for that channel. When both channels contain overlapping speech, the system channel SHALL determine the remote speaker label.
+The system SHALL attribute each transcript line using the channel its audio was segmented from, recorded during the session, and SHALL label microphone lines as spoken by `Me` without invoking the diarization model. A microphone line the echo path analysis reports as predominantly remote audio SHALL be dropped when the same words are already present on a system-channel line, otherwise attributed to the system-channel speaker covering that span when one exists and the system channel was active; when neither applies, the line keeps its `Me` attribution. Where no per-line provenance exists (sessions recorded before this pass, or a transcript that could not be matched), the system SHALL fall back to per-channel energy dominance, with the system channel winning overlapping speech.
 
 #### Scenario: User speaks into microphone
-- **WHEN** a transcript chunk is mic-dominant
+- **WHEN** a transcript chunk was segmented from the microphone channel
 - **THEN** its relabeled line attributes the speech to `Me`
 
 #### Scenario: Meeting participants on speakers
-- **WHEN** a transcript chunk is system-channel audio
+- **WHEN** a transcript chunk was segmented from the system channel
 - **THEN** its relabeled line carries the speaker ID assigned by the diarization pipeline
 
+#### Scenario: Echo reaches the recognizer before the gate locks on
+- **WHEN** a microphone line repeats the words of a system-channel line within the same span
+- **THEN** the duplicate microphone line is removed instead of being shown twice under two names
+
 ### Requirement: Stable speaker numbering
-The system SHALL number distinct system-channel speakers as `Speaker 1`, `Speaker 2`, ... in order of first appearance within the session, and SHALL use these same labels consistently across the entire relabeled transcript.
+The system SHALL number distinct system-channel speakers as `Speaker 1`, `Speaker 2`, ... in order of first appearance within the session, and SHALL use these same labels consistently across the entire relabeled transcript. The system SHALL cluster pooled per-turn embeddings rather than each embedding window in isolation, SHALL cap the number of speakers it will claim for a session, and SHALL absorb clusters supported by too little speech into the nearest speaker, so that one continuous voice is never reported as dozens of speakers.
 
 #### Scenario: Recurring participant
 - **WHEN** the same remote voice appears at minutes 3 and 47 of a meeting
 - **THEN** both are labeled with the identical speaker ID
+
+#### Scenario: One remote voice for a whole meeting
+- **WHEN** diarization runs on a session whose system channel holds a single voice
+- **THEN** the pass reports one speaker, not one per embedding window
+
+#### Scenario: A single odd window
+- **WHEN** one embedding window matches no speaker well
+- **THEN** it joins the nearest speaker instead of starting a new one
 
 ### Requirement: Transcript relabel write-back
 The system SHALL relabel by rewriting the session transcript file so every line becomes `[HH:MM:SS] <Speaker>: text`, using a temp-file-plus-atomic-rename so that at every instant the transcript file contains either the complete live transcript or the complete relabeled transcript.

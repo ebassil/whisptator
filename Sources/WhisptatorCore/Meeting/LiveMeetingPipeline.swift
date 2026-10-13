@@ -1,11 +1,18 @@
 import Foundation
 
 /// Wires the live meeting data flow: aligned captures fan out to the streaming
-/// mp3 sink and the VAD segmenter; segments feed a bounded queue consumed by a
-/// single-lane transcriber that appends timestamped lines to the transcript.
+/// mp3 sink and to one voice-activity segmenter per source channel; segments
+/// feed a bounded queue consumed by a single-lane transcriber that appends
+/// timestamped lines to the transcript and records their provenance in the
+/// session ledger.
+///
+/// Keeping the channels apart is the point: folding microphone and system audio
+/// into one mono stream handed the transcriber two speakers at once (plus the
+/// echo of the remote voice coming back through the laptop speakers), which is
+/// what produced interleaved nonsense and mislabeled speakers.
 ///
 /// Thread model: `ingestMic`/`ingestSystem`/`poll` hop onto one serial audio
-/// queue; LAME and the segmenter only ever run there.
+/// queue; LAME and the segmenters only ever run there.
 public final class LiveMeetingPipeline: @unchecked Sendable {
     public struct Config: Sendable {
         public var saveDirectory: String
@@ -13,13 +20,24 @@ public final class LiveMeetingPipeline: @unchecked Sendable {
         public var mp3Bitrate: Int
         public var mp3Quality: Int
         public var sessionStem: String
+        /// Suppress the echo of system audio that the microphone picks up from
+        /// the machine's own speakers. Only meaningful in stereo mode.
+        public var echoSuppressionEnabled: Bool
 
-        public init(saveDirectory: String, audioSource: AudioSourceMode, mp3Bitrate: Int, mp3Quality: Int = 2, sessionStem: String) {
+        public init(
+            saveDirectory: String,
+            audioSource: AudioSourceMode,
+            mp3Bitrate: Int,
+            mp3Quality: Int = 2,
+            sessionStem: String,
+            echoSuppressionEnabled: Bool = true
+        ) {
             self.saveDirectory = saveDirectory
             self.audioSource = audioSource
             self.mp3Bitrate = mp3Bitrate
             self.mp3Quality = mp3Quality
             self.sessionStem = sessionStem
+            self.echoSuppressionEnabled = echoSuppressionEnabled
         }
     }
 
@@ -33,7 +51,10 @@ public final class LiveMeetingPipeline: @unchecked Sendable {
 
     private let aligner: StereoAligner
     private let sink: LameStreamSink
-    private let segmenter: EnergyVADSegmenter
+    private let segmenters: [EnergyVADSegmenter]
+    /// Echo path model for the microphone plane, when stereo and enabled.
+    private let echoGate: AcousticEchoGate?
+    public let ledger: TranscriptLedger
     public let queue: ChunkQueue
     private let writer: TranscriptWriter
     private let transcriber: ChunkTranscriber
@@ -60,6 +81,21 @@ public final class LiveMeetingPipeline: @unchecked Sendable {
         case .systemOnly: mode = .systemOnly
         }
 
+        self.echoGate = (mode == .stereo && config.echoSuppressionEnabled) ? AcousticEchoGate() : nil
+        self.ledger = TranscriptLedger()
+
+        var segmenters: [EnergyVADSegmenter] = []
+        switch mode {
+        case .stereo:
+            segmenters.append(EnergyVADSegmenter(channel: .mic, echoGate: echoGate))
+            segmenters.append(EnergyVADSegmenter(channel: .system))
+        case .micOnly:
+            segmenters.append(EnergyVADSegmenter(channel: .mic))
+        case .systemOnly:
+            segmenters.append(EnergyVADSegmenter(channel: .system))
+        }
+        self.segmenters = segmenters
+
         self.aligner = StereoAligner(mode: mode)
         self.sink = try LameStreamSink(
             url: audioURL,
@@ -69,12 +105,19 @@ public final class LiveMeetingPipeline: @unchecked Sendable {
             quality: config.mp3Quality
         )
         self.writer = try TranscriptWriter(url: transcriptURL)
-        self.segmenter = EnergyVADSegmenter()
         self.queue = ChunkQueue(capacity: 60)
-        self.transcriber = ChunkTranscriber(queue: queue, transcriber: transcriber, writer: writer, lineProcessor: lineProcessor)
+        self.transcriber = ChunkTranscriber(
+            queue: queue,
+            transcriber: transcriber,
+            writer: writer,
+            ledger: ledger,
+            lineProcessor: lineProcessor
+        )
 
-        self.segmenter.onSegment = { [weak self] segment in
-            self?.queue.enqueue(segment)
+        for segmenter in segmenters {
+            segmenter.onSegment = { [weak self] segment in
+                self?.queue.enqueue(segment)
+            }
         }
     }
 
@@ -84,6 +127,7 @@ public final class LiveMeetingPipeline: @unchecked Sendable {
 
     public var micMuted: Bool { aligner.micMuted }
     public var currentFrame: Int64 { aligner.currentFrame }
+    public var echoDiagnostics: AcousticEchoGate.Diagnostics? { echoGate?.diagnostics }
 
     // MARK: - Ingest (capture delegate threads)
 
@@ -125,7 +169,7 @@ public final class LiveMeetingPipeline: @unchecked Sendable {
 
     // MARK: - Teardown
 
-    /// Stops the flow: drains the aligner and segmenter, then waits for the
+    /// Stops the flow: drains the aligner and segmenters, then waits for the
     /// transcription backlog. Files remain open.
     public func drainAll(drainTimeout: TimeInterval) async -> Bool {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -133,9 +177,13 @@ public final class LiveMeetingPipeline: @unchecked Sendable {
                 let tail = self.aligner.flushAll(maxFrames: self.chunkFrames)
                 for chunk in tail {
                     self.sink.append(chunk)
-                    self.segmenter.append(chunk)
+                    for segmenter in self.segmenters {
+                        segmenter.append(chunk)
+                    }
                 }
-                self.segmenter.flush()
+                for segmenter in self.segmenters {
+                    segmenter.flush()
+                }
                 continuation.resume()
             }
         }
@@ -181,7 +229,9 @@ public final class LiveMeetingPipeline: @unchecked Sendable {
     private func drainAndFanOut(nowNanos: UInt64) {
         while let chunk = aligner.nextChunk(maxFrames: chunkFrames, nowNanos: nowNanos) {
             sink.append(chunk)
-            segmenter.append(chunk)
+            for segmenter in segmenters {
+                segmenter.append(chunk)
+            }
             reportLevel(of: chunk)
         }
     }

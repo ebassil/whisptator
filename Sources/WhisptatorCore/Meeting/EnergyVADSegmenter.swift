@@ -2,6 +2,11 @@ import Foundation
 
 /// Energy (RMS) voice-activity segmenter.
 ///
+/// One instance per source channel: a stereo session runs a microphone segmenter
+/// and a system-audio segmenter side by side, so the transcriber is never handed
+/// a fold of two speakers talking over each other (which produced half-garbled
+/// lines and phantom speakers when both planes were mixed together).
+///
 /// Cuts a segment at >= 400 ms trailing silence or at a 30 s hard cap, discards
 /// detections shorter than 300 ms, and pads emitted chunks by ~0.2 s at head
 /// and tail where audio is available. All frame constants are on the shared
@@ -31,6 +36,13 @@ public final class EnergyVADSegmenter: SpeechSegmenter, @unchecked Sendable {
     public var onSegment: ((SpeechSegment) -> Void)?
     private let sampleRate: Double
     private var params: Parameters
+    /// Channel this instance segments; tags every emitted segment.
+    private let channel: AudioChannel
+    /// Optional echo gate for the microphone plane. When present, incoming
+    /// microphone audio is gated against the system plane before detection, so
+    /// remote speech leaking through the speakers neither opens the VAD nor
+    /// reaches the transcriber.
+    private let echoGate: AcousticEchoGate?
 
     private var silenceCutFrames: Int64 { params.frames(params.silenceCutDuration, rate: sampleRate) }
     private var maxSpeechFrames: Int64 { params.frames(params.maxSpeechDuration, rate: sampleRate) }
@@ -89,16 +101,24 @@ public final class EnergyVADSegmenter: SpeechSegmenter, @unchecked Sendable {
     private var silenceRunFrames: Int64 = 0
     private var isFlushed = false
 
-    public init(sampleRate: Double = StereoAligner.sampleRate, parameters: Parameters = Parameters()) {
+    public init(
+        sampleRate: Double = StereoAligner.sampleRate,
+        parameters: Parameters = Parameters(),
+        channel: AudioChannel = .mic,
+        echoGate: AcousticEchoGate? = nil
+    ) {
         self.sampleRate = sampleRate
         self.params = parameters
+        self.channel = channel
+        self.echoGate = echoGate
         self.ring = SampleRing(capacity: Int(parameters.frames(parameters.historySeconds, rate: sampleRate)))
     }
 
     public func append(_ chunk: AlignedAudioChunk) {
         lock.lock(); defer { lock.unlock() }
         guard chunk.frames > 0 else { return }
-        let mono = chunk.monoFold()
+        let mono = samples(of: chunk)
+        guard !mono.isEmpty else { return }
         ring.append(mono[...])
 
         pending.append(contentsOf: mono)
@@ -140,6 +160,21 @@ public final class EnergyVADSegmenter: SpeechSegmenter, @unchecked Sendable {
     }
 
     // MARK: - Private
+
+    /// This instance's slice of the chunk: the channel plane, gated for the
+    /// microphone when an echo gate is attached.
+    private func samples(of chunk: AlignedAudioChunk) -> [Float] {
+        if chunk.channels == 1 {
+            // Mono session: the single plane belongs to whichever channel this
+            // instance was created for.
+            return Array(chunk.samples.prefix(chunk.frames))
+        }
+        let plane = chunk.plane(channel)
+        if channel == .mic, let echoGate, chunk.channels >= 2 {
+            return echoGate.process(mic: plane, system: chunk.plane(.system), startFrame: chunk.startFrame)
+        }
+        return plane
+    }
 
     private func processWindow(_ samples: ArraySlice<Float>, chunkStart: Int64, chunkConsumedFrames: Int64) {
         let windowFramesCount = Int64(samples.count)
@@ -198,7 +233,9 @@ public final class EnergyVADSegmenter: SpeechSegmenter, @unchecked Sendable {
             startFrame: paddedStart,
             endFrame: clampedEnd,
             samples: samples,
-            sampleRate: sampleRate
+            sampleRate: sampleRate,
+            channel: channel,
+            localShare: channel == .mic ? echoGate?.localShare(from: paddedStart, to: clampedEnd) : nil
         )
         onSegment?(segment)
     }

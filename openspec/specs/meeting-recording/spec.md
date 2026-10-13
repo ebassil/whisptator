@@ -73,6 +73,29 @@ The system SHALL save the meeting transcript to the user-configurable save locat
 - **WHEN** the user changes the save location while a meeting is active
 - **THEN** the active session keeps writing to its start-time location and subsequent sessions use the new one
 
+### Requirement: Microphone echo of system audio
+When the meeting records both the microphone and system audio, the system SHALL detect the acoustic echo path from the machine's speakers into the microphone and SHALL suppress that echo before segmenting and transcribing the microphone channel. The per-frame suppression decisions SHALL be retained so each completed microphone segment can be scored for its share of sustained local speech, and a segment whose measured share falls below the skip floor SHALL be dropped instead of handed to the recognizer. A segment the echo analysis never measured — recorded before the detector locked onto the echo path, or in a session with no echo to learn from — SHALL be transcribed. The stored audio file SHALL keep the microphone channel as captured.
+
+#### Scenario: Remote voice heard through the speakers
+- **WHEN** the microphone picks up system audio playback from the machine's own speakers
+- **THEN** those frames are attenuated in the microphone segmentation stream and are not transcribed as the local user's words
+
+#### Scenario: Local speech during remote speech
+- **WHEN** the microphone carries sustained energy clearly above the predicted echo level while system audio is playing
+- **THEN** that speech is preserved and transcribed
+
+#### Scenario: Echo-dominated segment never reaches the recognizer
+- **WHEN** a microphone segment measured after the echo path is learned is mostly the predicted echo
+- **THEN** the segment is skipped before transcription rather than written as garbled local speech
+
+#### Scenario: Segment before the echo path is learned
+- **WHEN** a microphone segment completes while the detector has not yet locked onto the echo path
+- **THEN** the segment is transcribed normally — no measurement, no suppression
+
+#### Scenario: No echo to learn
+- **WHEN** the system channel is silent, or the session records a single source
+- **THEN** the microphone channel is passed through untouched and nothing is suppressed
+
 ### Requirement: Audio retention policy
 The system SHALL support three audio retention modes: keep audio files, delete after finalization, or auto-delete after a configurable number of days. These SHALL apply to the session `.mp3` (and any legacy `.wav`) produced by meeting sessions.
 
