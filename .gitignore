@@ -10,6 +10,9 @@ DerivedData/
 .build/
 Package.resolved
 
+# Staged .app bundles (assembled by the Makefile outside .build)
+/App/
+
 # CocoaPods
 Pods/
 

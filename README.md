@@ -37,14 +37,14 @@ cd whisptator
 #### Debug build
 
 ```bash
-make build-debug    # Build and bundle into .build/debug/Whisptator.app
+make build-debug    # Build and bundle into App/Debug/Whisptator.app
 make run-debug      # Build and launch the app
 ```
 
 #### Release build
 
 ```bash
-make build-release  # Build and bundle into .build/release/Whisptator.app
+make build-release  # Build and bundle into App/Release/Whisptator.app
 make run-release    # Build and launch the app
 ```
 
@@ -73,7 +73,7 @@ make build-release CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMI
 You can verify the signing after building:
 
 ```bash
-codesign -dv .build/debug/Whisptator.app
+codesign -dv App/Debug/Whisptator.app
 # Should show: Identifier=com.whisptator.Whisptator
 # Should show: Info.plist=bound
 ```
@@ -318,7 +318,7 @@ log stream --predicate 'process == "Whisptator"'
 **App doesn't appear in Microphone / Screen Recording permissions**
 - SwiftPM signs binaries with an auto-generated identifier that doesn't match the Info.plist `CFBundleIdentifier`, so macOS TCC can't associate the permissions
 - The Makefile re-signs the `.app` bundle with the correct identifier — always use `make run-debug` or `make run-release` instead of `swift run`
-- Verify signing with `codesign -dv .build/debug/Whisptator.app` — you should see `Info.plist=bound`
+- Verify signing with `codesign -dv App/Debug/Whisptator.app` — you should see `Info.plist=bound`
 - Remove a stale TCC entry (reset permission):  
   - `tccutil reset Accessibility com.whisptator.Whisptator` 
   - `tccutil reset Microphone com.whisptator.Whisptator`  
