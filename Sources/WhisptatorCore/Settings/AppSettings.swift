@@ -144,6 +144,10 @@ public final class AppSettings: @unchecked Sendable {
            let decoded = try? JSONDecoder().decode(ShortcutKeyCode.self, from: data) {
             meetingShortcut = decoded
         }
+        if let data = UserDefaults.standard.data(forKey: Key.muteShortcut),
+           let decoded = try? JSONDecoder().decode(ShortcutKeyCode.self, from: data) {
+            muteShortcut = decoded
+        }
 
         if let raw = UserDefaults.standard.string(forKey: Key.pasteMode),
            let parsed = PasteMode(rawValue: raw) {
@@ -188,6 +192,20 @@ public final class AppSettings: @unchecked Sendable {
         }
         if let val = UserDefaults.standard.string(forKey: Key.meetingSaveLocation) {
             meetingSaveLocation = val
+        }
+        if UserDefaults.standard.object(forKey: Key.speakerIdentificationEnabled) != nil {
+            speakerIdentificationEnabled = UserDefaults.standard.bool(forKey: Key.speakerIdentificationEnabled)
+        }
+        if UserDefaults.standard.object(forKey: Key.panelAutoShow) == nil {
+            panelAutoShow = true
+        } else {
+            panelAutoShow = UserDefaults.standard.bool(forKey: Key.panelAutoShow)
+        }
+        if let val = UserDefaults.standard.string(forKey: Key.livePanelFrame) {
+            livePanelFrame = val
+        }
+        if let val = UserDefaults.standard.string(forKey: Key.huggingFaceToken) {
+            huggingFaceToken = val
         }
 
         if UserDefaults.standard.object(forKey: Key.launchAtLogin) != nil {
@@ -245,6 +263,7 @@ public final class AppSettings: @unchecked Sendable {
         static let pushToTalkShortcut = "pushToTalkShortcut"
         static let handsFreeShortcut = "handsFreeShortcut"
         static let meetingShortcut = "meetingShortcut"
+        static let muteShortcut = "muteShortcut"
         static let pasteMode = "pasteMode"
         static let selectedAudioDeviceID = "selectedAudioDeviceID"
         static let language = "language"
@@ -256,6 +275,10 @@ public final class AppSettings: @unchecked Sendable {
         static let meetingRetention = "meetingRetention"
         static let meetingRetentionDays = "meetingRetentionDays"
         static let meetingSaveLocation = "meetingSaveLocation"
+        static let speakerIdentificationEnabled = "speakerIdentificationEnabled"
+        static let panelAutoShow = "panelAutoShow"
+        static let livePanelFrame = "livePanelFrame"
+        static let huggingFaceToken = "huggingFaceToken"
         static let launchAtLogin = "launchAtLogin"
         static let showInDock = "showInDock"
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
@@ -293,6 +316,13 @@ public final class AppSettings: @unchecked Sendable {
         didSet {
             Self.encode(meetingShortcut, forKey: Key.meetingShortcut)
             onSettingChange?("meetingShortcut")
+        }
+    }
+
+    public var muteShortcut: ShortcutKeyCode = ShortcutKeyCode() {
+        didSet {
+            Self.encode(muteShortcut, forKey: Key.muteShortcut)
+            onSettingChange?("muteShortcut")
         }
     }
 
@@ -376,6 +406,34 @@ public final class AppSettings: @unchecked Sendable {
         didSet {
             UserDefaults.standard.set(meetingSaveLocation, forKey: Key.meetingSaveLocation)
             onSettingChange?("meetingSaveLocation")
+        }
+    }
+
+    public var speakerIdentificationEnabled: Bool = false {
+        didSet {
+            UserDefaults.standard.set(speakerIdentificationEnabled, forKey: Key.speakerIdentificationEnabled)
+            onSettingChange?("speakerIdentificationEnabled")
+        }
+    }
+
+    public var panelAutoShow: Bool = true {
+        didSet {
+            UserDefaults.standard.set(panelAutoShow, forKey: Key.panelAutoShow)
+            onSettingChange?("panelAutoShow")
+        }
+    }
+
+    public var livePanelFrame: String = "" {
+        didSet {
+            UserDefaults.standard.set(livePanelFrame, forKey: Key.livePanelFrame)
+            onSettingChange?("livePanelFrame")
+        }
+    }
+
+    public var huggingFaceToken: String = "" {
+        didSet {
+            UserDefaults.standard.set(huggingFaceToken, forKey: Key.huggingFaceToken)
+            onSettingChange?("huggingFaceToken")
         }
     }
 

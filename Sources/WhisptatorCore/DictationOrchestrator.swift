@@ -206,6 +206,11 @@ extension DictationOrchestrator: HotkeyMonitorDelegate {
             Task { await meetingRecorder.stopRecording() }
         }
     }
+
+    public func hotkeyMonitor(_ monitor: HotkeyMonitor, didDetectMicMuteToggle shortcut: ShortcutKeyCode) {
+        guard let meetingRecorder, meetingRecorder.state == .recording else { return }
+        meetingRecorder.toggleMicMute()
+    }
 }
 
 extension DictationOrchestrator: MicrophoneCaptureDelegate {

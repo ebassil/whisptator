@@ -13,6 +13,11 @@ public final class AppCoordinator: ObservableObject {
     public let dictationOrchestrator: DictationOrchestrator
     public let meetingRecorder: MeetingRecorder
     public let overlayController: OverlayController
+    public let panelController: LiveTranscriptPanelController
+    public let diarizationController: DiarizationModelController
+
+    @Published public private(set) var meetingState: MeetingState = .idle
+    @Published public private(set) var micMuted = false
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -22,11 +27,19 @@ public final class AppCoordinator: ObservableObject {
         self.dictationOrchestrator = DictationOrchestrator(settings: settings, modelManager: modelManager)
         self.meetingRecorder = MeetingRecorder(settings: settings, modelManager: modelManager)
         self.overlayController = OverlayController(settings: settings)
+        self.panelController = LiveTranscriptPanelController(settings: settings)
+        self.diarizationController = DiarizationModelController(settings: settings)
 
         dictationOrchestrator.meetingRecorder = meetingRecorder
+        panelController.attach(recorder: meetingRecorder)
 
-        settings.onSettingChange = { key in
+        settings.onSettingChange = { [weak self] key in
             AppLogger.shared.log(category: .settings, message: "Setting changed: \(key)")
+            if key.hasSuffix("Shortcut") {
+                Task { @MainActor in
+                    self?.dictationOrchestrator.updateShortcuts()
+                }
+            }
         }
 
         AppLogger.shared.loadFrom(settings: settings)
@@ -34,6 +47,10 @@ public final class AppCoordinator: ObservableObject {
         setupDictationCallbacks()
         setupMeetingCallbacks()
         setupNotifications()
+
+        if settings.speakerIdentificationEnabled {
+            Task { await diarizationController.refresh() }
+        }
     }
 
     public func start() throws {
@@ -46,6 +63,7 @@ public final class AppCoordinator: ObservableObject {
         AppLogger.shared.log(category: .system, message: "AppCoordinator stopped")
         dictationOrchestrator.stop()
         overlayController.dismiss()
+        panelController.shutdown()
     }
 
     private func setupDictationCallbacks() {
@@ -71,6 +89,7 @@ public final class AppCoordinator: ObservableObject {
     private func setupMeetingCallbacks() {
         meetingRecorder.onStateChange = { [weak self] state in
             DispatchQueue.main.async {
+                self?.meetingState = state
                 self?.handleMeetingStateChange(state)
             }
         }
@@ -79,12 +98,38 @@ public final class AppCoordinator: ObservableObject {
             DispatchQueue.main.async {
                 self?.overlayController.dismiss()
             }
+            AppLogger.shared.log(category: .meeting, message: "Meeting error: \(error.localizedDescription)")
         }
 
         meetingRecorder.onAudioLevel = { [weak self] level in
             DispatchQueue.main.async {
                 self?.overlayController.updateAudioLevel(level)
             }
+        }
+
+        meetingRecorder.onMicMuteChange = { [weak self] muted in
+            DispatchQueue.main.async {
+                self?.micMuted = muted
+            }
+        }
+
+        meetingRecorder.onSessionStarted = { [weak self] info in
+            DispatchQueue.main.async {
+                self?.panelController.sessionDidStart(info)
+            }
+        }
+
+        meetingRecorder.diarizerProvider = { [weak self] in
+            guard let self else { return MeetingRecorder.DiarizerSetup(diarizer: nil) }
+            if await self.diarizationController.ensureModels() {
+                if let diarizer = await self.diarizationController.makeDiarizer() {
+                    return MeetingRecorder.DiarizerSetup(diarizer: diarizer)
+                }
+                return MeetingRecorder.DiarizerSetup(diarizer: nil, message: "Speaker identification models could not be loaded.")
+            }
+            let message = self.diarizationController.failureMessage
+                ?? "Speaker identification was not applied: diarization models could not be downloaded."
+            return MeetingRecorder.DiarizerSetup(diarizer: nil, message: message)
         }
     }
 
@@ -139,10 +184,8 @@ public final class AppCoordinator: ObservableObject {
             overlayController.showCompletionThenDismiss()
         case .recording:
             overlayController.show(state: .recording)
-        case .transcribing:
+        case .finalizing:
             overlayController.updateState(.transcribing)
-        case .saving:
-            overlayController.showCompletionThenDismiss()
         case .error:
             overlayController.dismiss()
         }

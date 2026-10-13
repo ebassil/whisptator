@@ -18,7 +18,7 @@ final class TextCleanupTests: XCTestCase {
     func testFillerRemoval() {
         let remover = FillerRemover()
         let result = remover.removeFillers(
-            "um so I think we should go",
+            from: "um so I think we should go",
             fillerWords: [FillerWord(word: "um"), FillerWord(word: "so")]
         )
         XCTAssertFalse(result.lowercased().contains("um"))
@@ -28,7 +28,7 @@ final class TextCleanupTests: XCTestCase {
     func testWordReplacement() {
         let replacer = WordReplacer()
         let result = replacer.replaceWords(
-            "aye pee eye is great",
+            in: "aye pee eye is great",
             replacements: [WordReplacement(trigger: "aye pee eye", replacement: "API")]
         )
         XCTAssertEqual(result, "API is great")
@@ -37,7 +37,7 @@ final class TextCleanupTests: XCTestCase {
     func testWordReplacementCaseInsensitive() {
         let replacer = WordReplacer()
         let result = replacer.replaceWords(
-            "Kubernetes is awesome",
+            in: "Kubernetes is awesome",
             replacements: [WordReplacement(trigger: "kubernetes", replacement: "K8s")]
         )
         XCTAssertEqual(result, "K8s is awesome")
@@ -46,7 +46,7 @@ final class TextCleanupTests: XCTestCase {
     func testSnippetExpansion() {
         let expander = SnippetExpander()
         let result = expander.expandSnippets(
-            "my signature",
+            in: "my signature",
             snippets: [Snippet(trigger: "my signature", expansion: "Best regards, Emile")]
         )
         XCTAssertEqual(result, "Best regards, Emile")
@@ -55,7 +55,7 @@ final class TextCleanupTests: XCTestCase {
     func testSnippetLongestMatch() {
         let expander = SnippetExpander()
         let result = expander.expandSnippets(
-            "my signature",
+            in: "my signature",
             snippets: [
                 Snippet(trigger: "my sig", expansion: "Short"),
                 Snippet(trigger: "my signature", expansion: "Best regards, Emile"),

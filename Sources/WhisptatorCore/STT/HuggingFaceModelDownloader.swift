@@ -1,17 +1,21 @@
 import Foundation
 
-enum ModelDownloadError: Error, LocalizedError {
+public enum ModelDownloadError: Error, LocalizedError {
     case invalidResponse
     case httpError(Int)
     case fileNotFound(String)
     case symlinkFailed(URL, URL)
+    case gatedAccess(String)
+    case noMatchingFiles(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .invalidResponse: return "Invalid response from HuggingFace API"
         case .httpError(let code): return "HTTP \(code) from HuggingFace API"
         case .fileNotFound(let path): return "File not found: \(path)"
         case .symlinkFailed(let from, let to): return "Symlink failed: \(from.path) -> \(to.path)"
+        case .gatedAccess(let repo): return "Repository \(repo) requires accepting its conditions and an access token in Settings > Model (Hugging Face token)."
+        case .noMatchingFiles(let repo): return "No usable model files found in repository \(repo)."
         }
     }
 }
@@ -33,6 +37,7 @@ public actor HuggingFaceModelDownloader {
     public let repoId: String
     public let cacheDir: URL
     public let hubCacheDir: URL
+    public let token: String?
 
     private let session: URLSession
     private let decoder: JSONDecoder
@@ -40,9 +45,11 @@ public actor HuggingFaceModelDownloader {
 
     private static let skipFiles: Set<String> = [".gitattributes", "README.md"]
 
-    public init(repoId: String, cacheDir: URL) {
+    public init(repoId: String, cacheDir: URL, token: String? = nil) {
         self.repoId = repoId
         self.cacheDir = cacheDir
+        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.token = (trimmedToken?.isEmpty == false) ? trimmedToken : nil
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 600
@@ -58,15 +65,19 @@ public actor HuggingFaceModelDownloader {
 
     public func listRepoFiles() async throws -> [RepoFile] {
         let url = URL(string: "https://huggingface.co/api/models/\(repoId)")!
+        var request = URLRequest(url: url)
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         AppLogger.shared.log(category: .model, message: "listRepoFiles: fetching \(url.absoluteString)")
-        let (data, response) = try await session.data(from: url)
+        let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             AppLogger.shared.log(category: .model, message: "listRepoFiles: no HTTP response")
             throw ModelDownloadError.invalidResponse
         }
-        AppLogger.shared.log(category: .model, message: "listRepoFiles: HTTP \(httpResponse.statusCode), \(data.count) bytes")
         guard httpResponse.statusCode == 200 else {
             AppLogger.shared.log(category: .model, message: "listRepoFiles: unexpected status \(httpResponse.statusCode)")
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                throw ModelDownloadError.gatedAccess(repoId)
+            }
             throw ModelDownloadError.httpError(httpResponse.statusCode)
         }
         let decoded = try decoder.decode(HuggingFaceModelResponse.self, from: data)
@@ -80,14 +91,19 @@ public actor HuggingFaceModelDownloader {
 
     public func downloadFile(path: String, to destination: URL) async throws {
         let downloadURL = URL(string: "https://huggingface.co/\(repoId)/resolve/main/\(path)")!
+        var request = URLRequest(url: downloadURL)
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         AppLogger.shared.log(category: .model, message: "downloadFile: starting \(path) -> \(destination.path)")
-        let (localURL, response) = try await session.download(from: downloadURL)
+        let (localURL, response) = try await session.download(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             AppLogger.shared.log(category: .model, message: "downloadFile: no HTTP response for \(path)")
             throw ModelDownloadError.invalidResponse
         }
         AppLogger.shared.log(category: .model, message: "downloadFile: \(path) HTTP \(httpResponse.statusCode), temp at \(localURL.path)")
         guard httpResponse.statusCode == 200 else {
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                throw ModelDownloadError.gatedAccess(repoId)
+            }
             throw ModelDownloadError.httpError(httpResponse.statusCode)
         }
         try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -295,5 +311,40 @@ public actor HuggingFaceModelDownloader {
         }
         AppLogger.shared.log(category: .model, message: "HFDownloader: all files ready (\(ByteCountFormatter.string(fromByteCount: Int64(downloadedBytes), countStyle: .file)) downloaded)")
         progress(1.0, "Model files ready")
+    }
+
+    /// Downloads only the repo files matching `isWanted` (used for the ONNX
+    /// diarization exports, whose repos also ship quantized variants and
+    /// other unusable assets). Returns local URLs of the fetched files.
+    @discardableResult
+    public func ensureFiles(
+        matching isWanted: @escaping @Sendable (RepoFile) -> Bool,
+        progress: @escaping @Sendable (Double, String) -> Void
+    ) async throws -> [URL] {
+        let all = try await listRepoFiles()
+        let wanted = all.filter(isWanted)
+        guard !wanted.isEmpty else {
+            throw ModelDownloadError.noMatchingFiles(repoId)
+        }
+        let totalBytes = max(1, wanted.reduce(0) { $0 + $1.size })
+        var downloadedBytes = 0
+        var urls: [URL] = []
+        for file in wanted {
+            let destination = cacheDir.appendingPathComponent(file.path)
+            if fileManager.fileExists(atPath: destination.path),
+               let attrs = try? fileManager.attributesOfItem(atPath: destination.path),
+               (attrs[.size] as? Int64).map({ $0 > 0 }) == true {
+                downloadedBytes += file.size
+                urls.append(destination)
+                progress(Double(downloadedBytes) / Double(totalBytes), "Cached \(file.path)")
+                continue
+            }
+            try await downloadFile(path: file.path, to: destination)
+            downloadedBytes += file.size
+            urls.append(destination)
+            progress(Double(downloadedBytes) / Double(totalBytes), "Downloaded \(file.path)")
+        }
+        progress(1.0, "Diarization model files ready")
+        return urls
     }
 }

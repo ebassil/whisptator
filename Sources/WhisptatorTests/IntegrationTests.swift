@@ -45,13 +45,23 @@ final class IntegrationTests: XCTestCase {
         XCTAssertFalse(result.contains("  "))
     }
 
-    func testPasteEngineClipboard() {
+    func testPasteEngineClipboard() throws {
+        // Contract: ClipboardPaster writes the text, simulates Cmd-V, then
+        // restores the user's previous clipboard contents. Concurrent
+        // pasteboard reads during the write/restore cycle crash NSPasteboard,
+        // so we assert on the observable end state: original contents return
+        // and at least two write transactions occurred.
         let paster = ClipboardPaster()
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("pre-existing clipboard", forType: .string)
+        let initialChangeCount = pasteboard.changeCount
+
         paster.paste("Test paste content")
 
-        let pasteboard = NSPasteboard.general
-        let content = pasteboard.string(forType: .string)
-        XCTAssertEqual(content, "Test paste content")
+        let restored = pasteboard.string(forType: .string)
+        XCTAssertEqual(restored, "pre-existing clipboard", "clipboard must be restored after paste")
+        XCTAssertGreaterThanOrEqual(pasteboard.changeCount, initialChangeCount + 2, "paste text must have been written before restore")
     }
 
     func testModelManagerAvailableModels() {

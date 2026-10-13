@@ -31,7 +31,7 @@ public final class TranscriptSaver: @unchecked Sendable {
 
         let cutoffDate = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
 
-        for file in files where file.pathExtension == "wav" {
+        for file in files where file.pathExtension == "mp3" || file.pathExtension == "wav" {
             if let attributes = try? file.resourceValues(forKeys: [.creationDateKey]),
                let creationDate = attributes.creationDate,
                creationDate < cutoffDate {

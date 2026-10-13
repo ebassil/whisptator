@@ -4,7 +4,7 @@ public final class WhitespaceCleaner: @unchecked Sendable {
     public init() {}
 
     public func clean(_ text: String) -> String {
-        var result = text
+        var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
         result = result.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
 
@@ -12,7 +12,7 @@ public final class WhitespaceCleaner: @unchecked Sendable {
 
         result = capitalizeFirstLetter(result)
 
-        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result
     }
 
     private func fixPunctuationSpacing(_ text: String) -> String {

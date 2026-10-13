@@ -9,6 +9,11 @@ public protocol HotkeyMonitorDelegate: AnyObject {
     func hotkeyMonitor(_ monitor: HotkeyMonitor, didDetectPushToTalkUp shortcut: ShortcutKeyCode)
     func hotkeyMonitor(_ monitor: HotkeyMonitor, didDetectHandsFreeTap shortcut: ShortcutKeyCode)
     func hotkeyMonitor(_ monitor: HotkeyMonitor, didDetectMeetingToggle shortcut: ShortcutKeyCode)
+    func hotkeyMonitor(_ monitor: HotkeyMonitor, didDetectMicMuteToggle shortcut: ShortcutKeyCode)
+}
+
+public extension HotkeyMonitorDelegate {
+    func hotkeyMonitor(_ monitor: HotkeyMonitor, didDetectMicMuteToggle shortcut: ShortcutKeyCode) {}
 }
 
 public final class HotkeyMonitor: @unchecked Sendable {
@@ -21,6 +26,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
     private var pushToTalkShortcut: ShortcutKeyCode
     private var handsFreeShortcut: ShortcutKeyCode
     private var meetingShortcut: ShortcutKeyCode
+    private var muteShortcut: ShortcutKeyCode
 
     private var pushToTalkDown = false
     private var handsFreeRecording = false
@@ -40,12 +46,14 @@ public final class HotkeyMonitor: @unchecked Sendable {
         self.pushToTalkShortcut = settings.pushToTalkShortcut
         self.handsFreeShortcut = settings.handsFreeShortcut
         self.meetingShortcut = settings.meetingShortcut
+        self.muteShortcut = settings.muteShortcut
     }
 
     public func updateShortcuts(settings: AppSettings) {
         self.pushToTalkShortcut = settings.pushToTalkShortcut
         self.handsFreeShortcut = settings.handsFreeShortcut
         self.meetingShortcut = settings.meetingShortcut
+        self.muteShortcut = settings.muteShortcut
     }
 
     public func start() throws {
@@ -191,6 +199,9 @@ public final class HotkeyMonitor: @unchecked Sendable {
         if meetingShortcut.isModifierOnly {
             checkMeetingModifier()
         }
+        if muteShortcut.isModifierOnly && !muteShortcut.isEmpty {
+            checkMuteModifier()
+        }
     }
 
     private func checkPushToTalkModifier() {
@@ -229,6 +240,17 @@ public final class HotkeyMonitor: @unchecked Sendable {
         }
     }
 
+    private func checkMuteModifier() {
+        let needed = Set(muteShortcut.modifierKeyCodes)
+        let isHeld = !needed.isEmpty && pressedModifierKeyCodes == needed
+        let wasHeld = !needed.isEmpty && previousModifierKeyCodes == needed
+
+        if isHeld && !wasHeld {
+            AppLogger.shared.log(category: .shortcut, message: "Modifier-only shortcut matched: mic mute toggle")
+            delegate?.hotkeyMonitor(self, didDetectMicMuteToggle: muteShortcut)
+        }
+    }
+
     private func handleKeyDown(shortcut: ShortcutKeyCode) {
         if shortcut == pushToTalkShortcut && !pushToTalkDown {
             pushToTalkDown = true
@@ -242,6 +264,9 @@ public final class HotkeyMonitor: @unchecked Sendable {
             meetingRecording.toggle()
             AppLogger.shared.log(category: .shortcut, message: "Meeting toggle detected")
             delegate?.hotkeyMonitor(self, didDetectMeetingToggle: shortcut)
+        } else if !muteShortcut.isEmpty && !muteShortcut.isModifierOnly && shortcut == muteShortcut {
+            AppLogger.shared.log(category: .shortcut, message: "Mic mute toggle detected")
+            delegate?.hotkeyMonitor(self, didDetectMicMuteToggle: muteShortcut)
         }
     }
 
@@ -255,7 +280,10 @@ public final class HotkeyMonitor: @unchecked Sendable {
 
     private func isShortcutMatched(_ shortcut: ShortcutKeyCode) -> Bool {
         guard !shortcut.isModifierOnly else { return false }
-        return shortcut == pushToTalkShortcut || shortcut == handsFreeShortcut || shortcut == meetingShortcut
+        return shortcut == pushToTalkShortcut
+            || shortcut == handsFreeShortcut
+            || shortcut == meetingShortcut
+            || (!muteShortcut.isEmpty && !muteShortcut.isModifierOnly && shortcut == muteShortcut)
     }
 
     private func extractModifierFlags(_ flags: CGEventFlags) -> UInt32 {

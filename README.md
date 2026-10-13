@@ -121,14 +121,20 @@ A floating HUD appears near the top of the screen during recording, showing a re
 **Default shortcuts:**
 - Push-to-talk: Fn key
 - Hands-free: Fn key
-- Meeting start/stop: Not configured (set in Settings)
+- Meeting start/stop: Cmd+Opt+N (configurable)
+- Mic mute during meeting: Not configured (set in Settings → Meeting)
 
 ### Meeting Recording
 
-1. Trigger the meeting shortcut (or use the menu bar)
-2. The app captures system audio + microphone (configurable)
-3. Trigger the shortcut again to stop
-4. The audio is transcribed and saved to `~/Documents/Whisptator/Meetings/`
+Meetings are transcribed **live** — text lands in the transcript file while you are still in the call.
+
+1. Trigger the meeting shortcut (or use the menu bar). A floating **Live Transcript panel** opens automatically (configurable).
+2. The app captures system audio + microphone as two discrete channels (mic = left, system = right; configurable)
+3. Transcript lines (`[HH:MM:SS] text`) are appended to `S.txt` and the `.mp3` grows live in the save folder — a crash loses at most the last flush window (≤ 2 s audio, one chunk of text)
+4. Mute your microphone mid-meeting via the shortcut or the panel button; muted stretches are recorded as silence and marked `(mic muted)` in the transcript
+5. Trigger the shortcut again to stop. Queue drains, files finalize, and (if speaker identification is enabled) a local diarization pass relabels the transcript with `Speaker N:` / `Me:` prefixes
+
+Transcripts and audio are saved to `~/Documents/Whisptator/Meetings/` by default (configurable).
 
 ### Text Cleanup
 
@@ -167,7 +173,10 @@ Open Settings from the menu bar or press Cmd+,.
 | Setting | Description |
 |---------|-------------|
 | Model info | Shows model name, size, and download status |
-| Download | Download the Whisper Large-v3 Turbo CoreML bundle |
+| Download | Download the selected ASR model (Whisper Large-v3 Turbo CoreML by default) |
+| Diarization models | Optional speaker-diarization-3.1 ONNX weights (segmentation-3.0 MIT + wespeaker embedding CC-BY-4.0) — one-click download, no token needed |
+
+> The diarization models come from the public `onnx-community` ONNX exports of the exact weights referenced by [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) — no Hugging Face account required. They are only fetched when you enable **Speaker identification** in the Meeting tab, and everything works without them (transcript stays unlabeled).
 
 ### Cleanup Tab
 
@@ -183,9 +192,12 @@ Open Settings from the menu bar or press Cmd+,.
 | Setting | Description |
 |---------|-------------|
 | Audio source | System + Microphone, Microphone only, or System only |
-| Retention | Keep audio, Delete after transcription, or Auto-delete after N days |
+| Speaker identification | Optional final pass labeling speakers with a local pyannote model (default off) |
+| Live transcript panel | Auto-show the floating panel when a meeting starts (default on) |
+| Retention | Keep the `.mp3`, delete after transcription, or auto-delete after N days |
 | Start/stop shortcut | Configure the meeting recording shortcut |
-| Save location | Default: `~/Documents/Whisptator/Meetings/` |
+| Mute shortcut | Global shortcut to mute/unmute the mic during a meeting |
+| Save location | Default: `~/Documents/Whisptator/Meetings/` — transcript `.txt` and audio `.mp3` are written live here |
 
 ## Architecture
 
@@ -202,7 +214,10 @@ Whisptator/
 │   └── WhisptatorCore/                    # Library target
 │       ├── Audio/
 │       │   ├── AudioDeviceManager.swift   # AVCaptureDevice enumeration
-│       │   └── MicrophoneCapture.swift    # Audio capture → Float32 buffer
+│       │   ├── MicrophoneCapture.swift    # Audio capture → Float32 buffer
+│       │   ├── MP3Encoder.swift           # Streaming + batch LAME encoder
+│       │   ├── LameStreamSink.swift       # Live .mp3 file sink with periodic fsync
+│       │   └── AudioFileSaver.swift       # Dictation .wav/.mp3 saving
 │       ├── STT/
 │       │   ├── ModelManager.swift         # Whisper model download/load
 │       │   └── TranscriptionEngine.swift  # Async transcription wrapper
@@ -220,10 +235,28 @@ Whisptator/
 │       │   ├── SnippetExpander.swift      # Snippet expansion
 │       │   └── WhitespaceCleaner.swift    # Whitespace normalization
 │       ├── Meeting/
-│       │   ├── SystemAudioCapture.swift   # ScreenCaptureKit audio
-│       │   ├── AudioMixer.swift           # System + mic mixing
-│       │   ├── MeetingRecorder.swift      # Meeting orchestration
-│       │   └── TranscriptSaver.swift      # File saving
+│       │   ├── SystemAudioCapture.swift   # ScreenCaptureKit audio (48 kHz)
+│       │   ├── StereoAligner.swift        # Pairs mic/system buffers on one frame timeline
+│       │   ├── LiveMeetingPipeline.swift  # Streaming orchestrator (sink + segmenter fan-out)
+│       │   ├── EnergyVADSegmenter.swift   # Speech detection & chunking (400 ms cut, 30 s cap)
+│       │   ├── ChunkQueue.swift           # Bounded pending-chunk queue (drops oldest)
+│       │   ├── ChunkTranscriber.swift     # Single-lane Whisper worker, ordered writes
+│       │   ├── TranscriptWriter.swift     # Durable [HH:MM:SS] line appends (fsync per line)
+│       │   ├── TranscriptRelabeler.swift  # Speaker relabeling with atomic write-back
+│       │   ├── SpeakerDiarizer.swift      # Engine abstraction for diarization
+│       │   ├── MeetingRecorder.swift      # Live session orchestration (states, mute, hotkeys)
+│       │   └── TranscriptSaver.swift      # Legacy saving + old-file cleanup (.mp3/.wav)
+│       ├── Diarization/
+│       │   ├── PyannoteDiarizer.swift     # ONNX segmentation + embeddings + clustering
+│       │   ├── OrtModel.swift             # ONNX Runtime session wrapper
+│       │   ├── LogMelExtractor.swift      # 16 kHz log-mel features (FFT + filterbank)
+│       │   ├── WeSpeakerFbank.swift       # Kaldi 80-bin fbank for the embedding model
+│       │   ├── AgglomerativeClustering.swift
+│       │   └── DiarizationModelStore.swift# Downloads for the diarization ONNX models
+│       ├── Panel/
+│       │   ├── LiveTranscriptPanel.swift  # Floating panel (NSPanel + SwiftUI) + controller
+│       │   ├── TranscriptFileWatcher.swift# DispatchSource tail reads, reload on atomic rename
+│       │   └── AutoScrollController.swift # Pinned/free auto-scroll state machine
 │       ├── Settings/
 │       │   └── AppSettings.swift          # UserDefaults wrapper
 │       ├── Permissions/
@@ -232,7 +265,13 @@ Whisptator/
 │       └── FloatingHUD.swift              # Recording indicator panel
 └── Sources/WhisptatorTests/
     ├── TextCleanupTests.swift             # Pipeline unit tests
-    └── IntegrationTests.swift             # Integration tests
+    ├── IntegrationTests.swift             # Integration tests
+    ├── EnergyVADSegmenterTests.swift      # Segmentation (silence cut, 30 s cap, padding)
+    ├── LiveTranscriptionTests.swift       # Timestamps, ordering, queue overflow
+    ├── StreamingMP3Tests.swift            # Live LAME sink (30-min synthetic file)
+    ├── LiveSessionIntegrationTests.swift  # Simulated meetings incl. crash durability
+    ├── TranscriptRelabelerTests.swift     # Speaker attribution + mel/FFT/clustering
+    └── LivePanelTests.swift               # Auto-scroll machine + file watcher
 ```
 
 ### Data Flow
@@ -244,11 +283,18 @@ Dictation:
   → TextCleanupPipeline → cleaned text
   → PasteEngine (Clipboard/Typing) → frontmost app
 
-Meeting:
-  Hotkey (CGEvent) → SystemAudioCapture + MicrophoneCapture
-  → AudioMixer → [Float32 buffer]
-  → TranscriptionEngine → text
-  → TranscriptSaver → ~/Documents/Whisptator/Meetings/
+Meeting (live pipeline):
+  Meeting shortcut → MeetingRecorder starts captures
+  MicrophoneCapture (48 kHz) ─┐
+  SystemAudioCapture (48 kHz) ┴→ StereoAligner (mic=L / system=R, mute = zero-fill)
+        ├→ LameStreamSink        → S.mp3 grows on disk (encoder flush + fsync ≤ 2 s)
+        └→ EnergyVADSegmenter    → speech chunks (cut on 400 ms silence, 30 s cap, 0.2 s pad)
+              → ChunkQueue (bounded 60; overflow drops oldest, audio unaffected)
+              → ChunkTranscriber (one lane, Whisper per chunk, 16 kHz)
+              → TranscriptWriter → S.txt appends `[HH:MM:SS] text` + fsync
+  Live panel tails S.txt (file watcher, auto-scroll with manual override)
+  Stop → drain queue → (optional) PyannoteDiarizer on S.mp3 system channel
+         → TranscriptRelabeler rewrites S.txt with `Speaker N:` / `Me:` (atomic rename)
 ```
 
 ## Debugging
@@ -301,6 +347,22 @@ log stream --predicate 'process == "Whisptator"'
 - Screen Recording permission is required for system audio
 - Microphone-only mode works without Screen Recording permission
 - Check System Settings → Privacy & Security → Screen Recording
+
+**Meeting transcript lags or has gaps**
+- Transcript lines land ~2–4 s after the sentence ends; that is normal pipeline latency
+- Long pauses in the transcript mean the chunk queue overflowed (Whisper worker lagging, e.g. dictation using the model concurrently). Check the Logs tab for "Chunk queue full" — the `.mp3` stays complete, so the tail can be recovered manually later
+- VAD cuts words in noisy rooms? The segmentation constants (`EnergyVADSegmenter.Parameters`) are tunable and are calibrated per room profile
+
+**Speaker labels were not applied**
+- Speaker identification is opt-in (Settings → Meeting) and downloads the pyannote speaker-diarization-3.1 ONNX weights once
+- Trigger the download from Settings → Model ("Diarization models"); status and any errors are shown there (no token required for the public exports)
+- A failed/missing model never blocks recording; the live transcript is kept unlabeled
+- Labels are written only in the final pass (after stop); lines whose audio is mic-only are labeled `Me`
+
+**Live transcript panel**
+- "Show Live Transcript" in the menu bar opens/focuses the single panel instance; closing it never affects recording
+- Auto-scroll follows new lines until you scroll up; returning to within 40 pt of the bottom (or the "N new · Jump to live" pill) resumes following
+- Panel position/size are remembered between sessions
 
 ### Resetting Settings
 

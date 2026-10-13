@@ -13,13 +13,13 @@ struct SettingsView: View {
             DictationSettingsTab(settings: coordinator.settings, onShortcutChange: { coordinator.dictationOrchestrator.updateShortcuts() })
                 .tabItem { Label("Dictation", systemImage: "mic") }
 
-            ModelSettingsTab(settings: coordinator.settings, modelManager: coordinator.modelManager)
+            ModelSettingsTab(settings: coordinator.settings, modelManager: coordinator.modelManager, diarizationController: coordinator.diarizationController)
                 .tabItem { Label("Model", systemImage: "cpu") }
 
             CleanupSettingsTab(settings: coordinator.settings)
                 .tabItem { Label("Cleanup", systemImage: "text.badge.checkmark") }
 
-            MeetingSettingsTab(settings: coordinator.settings, onShortcutChange: { coordinator.dictationOrchestrator.updateShortcuts() })
+            MeetingSettingsTab(settings: coordinator.settings, onShortcutChange: { coordinator.dictationOrchestrator.updateShortcuts() }, diarizationController: coordinator.diarizationController)
                 .tabItem { Label("Meeting", systemImage: "video") }
 
             OverlaySettingsTab(settings: coordinator.settings)
@@ -392,6 +392,7 @@ struct CategoryBadge: View {
 struct ModelSettingsTab: View {
     @Bindable var settings: AppSettings
     var modelManager: ModelManager
+    var diarizationController: DiarizationModelController?
     @State private var hubCacheStatuses: [String: Bool] = [:]
 
     var body: some View {
@@ -415,6 +416,24 @@ struct ModelSettingsTab: View {
                             }
                         )
                     }
+                }
+
+                Section {
+                    HStack {
+                        Text("Hugging Face Access Token")
+                        Spacer()
+                        SecureField("hf_… (optional — only for gated repos)", text: $settings.huggingFaceToken)
+                            .frame(width: 260)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    if let controller = diarizationController {
+                        DiarizationModelStatusRow(controller: controller)
+                    }
+                    Text("Speaker identification uses the pyannote speaker-diarization-3.1 weights (segmentation-3.0, MIT + wespeaker-voxceleb-resnet34-LM, CC-BY-4.0), downloaded automatically from their public ONNX exports — no token needed. Meeting recording works with or without these models.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Diarization Models (optional)")
                 }
             }
             .listStyle(.inset)
@@ -563,6 +582,7 @@ struct CleanupSettingsTab: View {
 struct MeetingSettingsTab: View {
     @Bindable var settings: AppSettings
     var onShortcutChange: (() -> Void)?
+    var diarizationController: DiarizationModelController?
 
     var body: some View {
         Form {
@@ -575,11 +595,29 @@ struct MeetingSettingsTab: View {
                 .pickerStyle(.radioGroup)
             }
 
+            Section {
+                Toggle("Identify speakers after recording", isOn: $settings.speakerIdentificationEnabled)
+                if settings.speakerIdentificationEnabled {
+                    if let controller = diarizationController {
+                        DiarizationModelStatusRow(controller: controller)
+                    }
+                    Text("Runs a local pyannote speaker-diarization-3.1 model over the recording when you stop; adds “Speaker N / Me” labels to the transcript. Downloads the models once (Model tab, opt-in; MIT / CC-BY-4.0 licensed).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Speaker Identification")
+            }
+
+            Section("Live Transcript Panel") {
+                Toggle("Show live transcript panel when a meeting starts", isOn: $settings.panelAutoShow)
+            }
+
             Section("Retention") {
                 Picker("Audio Retention", selection: $settings.meetingRetention) {
-                    Text("Keep audio").tag(AudioRetentionMode.keep)
-                    Text("Delete after transcription").tag(AudioRetentionMode.deleteAfterTranscription)
-                    Text("Auto-delete after N days").tag(AudioRetentionMode.autoDeleteAfterDays)
+                    Text("Keep the .mp3 audio").tag(AudioRetentionMode.keep)
+                    Text("Delete audio after transcription").tag(AudioRetentionMode.deleteAfterTranscription)
+                    Text("Auto-delete audio after N days").tag(AudioRetentionMode.autoDeleteAfterDays)
                 }
                 .pickerStyle(.radioGroup)
 
@@ -588,12 +626,24 @@ struct MeetingSettingsTab: View {
                 }
             }
 
-            Section("Shortcut") {
+            Section("Shortcuts") {
                 HStack {
                     Text("Start/Stop Recording")
                     Spacer()
                     ShortcutRecorderView(shortcut: $settings.meetingShortcut)
                 }
+                HStack {
+                    Text("Mute/Unmute Microphone")
+                    Spacer()
+                    ShortcutRecorderView(shortcut: $settings.muteShortcut)
+                    Button("Clear") {
+                        settings.muteShortcut = ShortcutKeyCode()
+                    }
+                    .disabled(settings.muteShortcut.isEmpty)
+                }
+                Text("The mute shortcut toggles the microphone during a meeting (muted audio is recorded as silence, keeping the timeline intact).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Save Location") {
@@ -612,11 +662,20 @@ struct MeetingSettingsTab: View {
                         }
                     }
                 }
+                Text("Transcript (.txt) and audio (.mp3) are written live to this folder while recording; changes apply to the next meeting.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
         .padding()
         .onChange(of: settings.meetingShortcut) { _, _ in onShortcutChange?() }
+        .onChange(of: settings.muteShortcut) { _, _ in onShortcutChange?() }
+        .onChange(of: settings.speakerIdentificationEnabled) { _, enabled in
+            if enabled, let controller = diarizationController {
+                Task { await controller.ensureModels() }
+            }
+        }
     }
 }
 
@@ -668,5 +727,47 @@ struct OverlaySettingsTab: View {
         }
         .formStyle(.grouped)
         .padding()
+    }
+}
+
+struct DiarizationModelStatusRow: View {
+    var controller: DiarizationModelController
+
+    var body: some View {
+        HStack {
+            switch controller.status {
+            case .ready:
+                Label("Speaker models ready", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            case .downloading(let progress, let message):
+                VStack(alignment: .leading, spacing: 2) {
+                    ProgressView(value: progress)
+                        .frame(width: 180)
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            case .failed(let message):
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .lineLimit(3)
+            case .notDownloaded, .unknown:
+                Text("Speaker models not downloaded")
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if controller.status != .ready {
+                Button(controller.isBusy ? "Downloading…" : "Download") {
+                    Task { await controller.ensureModels() }
+                }
+                .disabled(controller.isBusy)
+            } else {
+                Button("Re-check") {
+                    Task { await controller.refresh() }
+                }
+            }
+        }
     }
 }
